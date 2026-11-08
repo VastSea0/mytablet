@@ -28,6 +28,7 @@ enum Adb {
     }
     static func launchReceiver(port: UInt16) {
         run(["forward", "tcp:\(port)", "tcp:\(port)"])
+        run(["shell", "pm grant dev.mytablet android.permission.WRITE_SECURE_SETTINGS"]) // lets the receiver switch off Android's edge gestures
         run(["shell", "input keyevent KEYCODE_WAKEUP; am start -n dev.mytablet/.MainActivity"])
     }
 }

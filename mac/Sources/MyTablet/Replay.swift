@@ -4,7 +4,7 @@ import AppKit
 enum Replay {
     static func run(_ path: String, into g: GestureEngine) {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
-        HitTest.onlyOwner = "TouchLab"
+        HitTest.onlyOwner = ["TouchLab"]
         Thread.detachNewThread {
             Thread.sleep(forTimeInterval: 7)
             let before = CGEvent(source: nil)?.location ?? .zero, front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"

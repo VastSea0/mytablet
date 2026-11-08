@@ -87,6 +87,9 @@ final class GestureEngine {
         }
         action()
         focused = target ?? focused
+        // Only someone actually working on the Mac gets focus back. Otherwise the tapped app stays
+        // active, which popovers, sheets and text fields depend on.
+        guard MacActivity.isBusy else { return }
         q.asyncAfter(deadline: .now() + 0.08) {
             guard let macApp, let target, macApp.processIdentifier != target.pid,
                   !HitTest.hasOpenMenu(pid: target.pid) else { return }
@@ -106,6 +109,7 @@ final class GestureEngine {
     private func endExclusive() {
         guard let mac = exclusiveMacApp else { return }
         exclusiveMacApp = nil
+        guard MacActivity.isBusy else { return }
         q.asyncAfter(deadline: .now() + 0.08) { mac.activate() }
     }
 

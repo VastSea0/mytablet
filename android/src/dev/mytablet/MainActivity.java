@@ -5,6 +5,7 @@ import android.graphics.Color;
 import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.InputDevice;
 import android.view.MotionEvent;
@@ -34,7 +35,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private volatile Surface surface;
     private final LinkedBlockingQueue<byte[]> outbox = new LinkedBlockingQueue<>();
     private Thread server;
-    private volatile boolean running;
+    private volatile boolean running, streaming;
     private KeyClicks clicks;
 
     @Override protected void onCreate(Bundle b) {
@@ -108,8 +109,22 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         } catch (Exception e) { Log.e(TAG, "server", e); }
     }
 
+    /**
+     * Android ignores edge swipes while setup is marked incomplete, which is the only thing that fully
+     * stops its bars appearing over the stream. Always restored when streaming stops or we leave the screen.
+     */
+    private void setEdgeGestures(boolean enabled) {
+        try { Settings.Secure.putInt(getContentResolver(), "user_setup_complete", enabled ? 1 : 0); }
+        catch (SecurityException e) { Log.w(TAG, "edge gestures unchanged", e); }
+    }
+
+    @Override protected void onStop() { setEdgeGestures(true); super.onStop(); }
+    @Override protected void onStart() { super.onStart(); if (streaming) setEdgeGestures(false); }
+
     private void runSession(Socket s) throws Exception {
         while (surface == null) Thread.sleep(50);
+        streaming = true;
+        setEdgeGestures(false);
         outbox.clear();
         final OutputStream os = s.getOutputStream();
         Thread writer = new Thread(() -> {
@@ -121,6 +136,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
         MediaFormat fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, W, H);
         fmt.setInteger(MediaFormat.KEY_PRIORITY, 0);
+        // Without these the decoder's output is treated as the wrong matrix and range, which washes colours out.
+        fmt.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709);
+        fmt.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED);
+        fmt.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
         fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024);
         MediaCodec codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
         Log.i(TAG, "decoder " + codec.getName());
@@ -167,6 +186,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 codec.queueInputBuffer(idx, 0, len, config ? 0 : seq * 1000L, config ? MediaCodec.BUFFER_FLAG_CODEC_CONFIG : 0);
             }
         } finally {
+            streaming = false;
+            setEdgeGestures(true);
             live.set(false);
             writer.interrupt();
             out.join(500);
@@ -187,5 +208,5 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
-    @Override protected void onDestroy() { running = false; super.onDestroy(); }
+    @Override protected void onDestroy() { running = false; setEdgeGestures(true); super.onDestroy(); }
 }

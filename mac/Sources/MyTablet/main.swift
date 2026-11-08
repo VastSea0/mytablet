@@ -31,6 +31,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         item.menu = m
 
         requestPermissions()
+        MacActivity.start()
         let d = VirtualDisplay(layout: DisplayLayout.all[layoutIndex])
         display = d
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self.startSession() }
@@ -54,7 +55,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         session = s
         let sh = Shell(displayID: d.id)
         shell = sh
-        if ProcessInfo.processInfo.environment["MYTABLET_SHELL_TEST"] != nil { HitTest.onlyOwner = "TouchLab" } // shell-only test mode: app input is dropped
+        if ProcessInfo.processInfo.environment["MYTABLET_SHELL_TEST"] != nil { HitTest.onlyOwner = ["TouchLab", "Calculator", "TextEdit"] } // shell-only test mode: app input is dropped
         let testing = ProcessInfo.processInfo.environment["MYTABLET_REPLAY"] != nil // replays target windows directly, no shell on top
         if !testing { sh.start() }
         if !testing { s.gestures.shellCaptures = { [weak sh] p, h in sh?.captures(p, height: h) ?? false } }
@@ -81,7 +82,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ n: Notification) {
         session?.stop()
-        _ = Adb.run(["shell", "am force-stop dev.mytablet"])
+        _ = Adb.run(["shell", "settings put secure user_setup_complete 1; am force-stop dev.mytablet"])
     }
 }
 

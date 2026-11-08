@@ -42,6 +42,7 @@ enum Windows {
     }
 
     static func raise(_ w: TabletWindow) {
+        if !MacActivity.isBusy { NSRunningApplication(processIdentifier: w.pid)?.activate() }
         guard let el = element(for: w) else { return }
         AXUIElementSetAttributeValue(el, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(el, kAXRaiseAction as CFString)

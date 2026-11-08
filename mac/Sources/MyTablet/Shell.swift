@@ -3,6 +3,7 @@ import CoreWLAN
 import IOKit.ps
 import QuartzCore
 import ScreenCaptureKit
+import CoreImage
 
 private final class ShellPanel: NSPanel {
     override var canBecomeKey: Bool { false }
@@ -71,8 +72,10 @@ final class Shell {
 
     private var main: ShellPanel!, dockPanel: ShellPanel!, keyPanel: ShellPanel!, pill: ShellPanel!, ccPanel: ShellPanel!, overlayPanel: ShellPanel!, statusPanel: ShellPanel!
     private var root: CALayer!, wallpaper: CALayer!, homeLayer: CALayer!, pagesLayer: CALayer!, dots: CALayer!, switcherLayer: CALayer!
-    private var overlay: CALayer!, statusWall: CALayer!, ccBackdrop: NSVisualEffectView!, ccSheet: NSView!
+    private var overlay: CALayer!, statusWall: CALayer!, ccSheet: NSView!
     private var glassHost: NSView!
+    private var dockWall: CALayer!, ccWall: CALayer!, keyWall: CALayer!
+    private var fullscreenWindow = false
     private var folderGlass: [String: NSGlassEffectView] = [:]
     private var widgetLayers: [String: CALayer] = [:]
     private var clock: CATextLayer!, statusRight: CATextLayer!, emptyLabel: CATextLayer!, doneButton: CALayer!, addButton: CALayer!
@@ -84,7 +87,7 @@ final class Shell {
 
     // Read by the gesture queue at touch-down.
     private let stateLock = NSLock()
-    private var _mode = Mode.home, _dockRect: CGRect?, _kbRect: CGRect?, _ccOpen = false
+    private var _mode = Mode.home, _dockRect: CGRect?, _kbRect: CGRect?, _ccOpen = false, _fullscreen = false
     private var mode: Mode {
         get { stateLock.lock(); defer { stateLock.unlock() }; return _mode }
         set { stateLock.lock(); _mode = newValue; stateLock.unlock() }
@@ -98,7 +101,6 @@ final class Shell {
     }
 
     private var apps: [String: AppEntry] = [:], layout = HomeLayout()
-    private var recents: [String] = []
     private var tileLayers: [String: CALayer] = [:]
     private var tileFrames: [String: CGRect] = [:]     // page-space frames
     private let icon: CGFloat = 76, cellW: CGFloat = 132, cellH: CGFloat = 122, gridTop: CGFloat = 52
@@ -145,8 +147,8 @@ final class Shell {
     var passTap: ((CGPoint) -> Void)?
     var playSound: ((Int) -> Void)?
     private var focusPid: pid_t?
-    private let topEdge: CGFloat = 44 // reaches below Android's status bar so the pull starts where Android can't take it
-    let edgeHeight: CGFloat = 32 // starts above Android's own bottom-edge system gesture band
+    private var topEdge: CGFloat { menuInset }
+    let edgeHeight: CGFloat = 20
 
     init(displayID: CGDirectDisplayID) { self.displayID = displayID }
 
@@ -158,8 +160,8 @@ final class Shell {
         layoutAll()
         showHome(animated: false)
         Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.updateStatus() }
-        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refreshWidgets() }
-        Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in self?.returnHomeIfEmpty() }
+        Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in self?.refreshWidgets() }
+        Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in self?.syncWithWindows() }
         updateStatus()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             self?.layoutAll()
@@ -207,10 +209,12 @@ final class Shell {
         dockPanel.contentView = dockHost
         let dg = makeGlass(CGRect(x: 0, y: 0, width: 400, height: 80), radius: 30)
         dockGlass = dg.view; dockRoot = dg.content
+        dockWall = CALayer(); dockWall.contentsGravity = .resize
+        dockHost.layer!.addSublayer(dockWall)
         dockHost.addSubview(dockGlass)
 
         // Sits over the Mac's menu bar on this display only, showing what iPadOS shows there.
-        statusPanel = panel(.statusBar + 1)
+        statusPanel = panel(.statusBar + 5) // stays above Control Center, like the real status bar
         let sh = NSView(); sh.wantsLayer = true; statusPanel.contentView = sh
         let sr = CALayer(); sr.isGeometryFlipped = true; sr.masksToBounds = true; sr.name = "root"; sh.layer!.addSublayer(sr)
         statusWall = CALayer(); statusWall.contentsGravity = .resizeAspectFill; sr.addSublayer(statusWall)
@@ -226,8 +230,7 @@ final class Shell {
 
         ccPanel = panel(.statusBar + 3)
         let ccHost = NSView(); ccHost.wantsLayer = true; ccPanel.contentView = ccHost
-        ccBackdrop = NSVisualEffectView(); ccBackdrop.material = .fullScreenUI; ccBackdrop.blendingMode = .behindWindow; ccBackdrop.state = .active; ccBackdrop.alphaValue = 0
-        ccHost.addSubview(ccBackdrop)
+        ccWall = CALayer(); ccWall.contentsGravity = .resize; ccWall.opacity = 0; ccHost.layer!.addSublayer(ccWall)
         ccSheet = NSView(); ccSheet.wantsLayer = true; ccHost.addSubview(ccSheet)
 
         overlayPanel = panel(.statusBar + 4)
@@ -268,7 +271,7 @@ final class Shell {
         let f = screen.frame, size = f.size
         for p in [main!, ccPanel!, overlayPanel!] { p.setFrame(f, display: true); p.contentView?.frame = CGRect(origin: .zero, size: size) }
         glassHost.frame = CGRect(origin: .zero, size: CGSize(width: size.width * 40, height: size.height))
-        ccBackdrop.frame = CGRect(origin: .zero, size: size)
+        ccWall.frame = CGRect(origin: .zero, size: size)
         root.frame = CGRect(origin: .zero, size: size)
         wallpaper.frame = root.frame; homeLayer.frame = root.frame; pagesLayer.frame = root.frame; overlay.frame = root.frame
         loadWallpaper()
@@ -283,6 +286,29 @@ final class Shell {
         rebuildHome(); layoutDock(); layoutKeyboard(); buildControlCenter()
         pill.setFrame(CGRect(x: f.midX - 70, y: f.minY + 5, width: 140, height: 6), display: true)
     }
+
+    /// What's on screen beneath the shell. Liquid Glass only refracts content in its own window, so
+    /// each glass surface gets this as a layer behind it.
+    private func withBackdrop(_ done: @escaping (CGImage?) -> Void) {
+        if mode != .app { done(root.snapshot()); return }
+        let id = displayID
+        Task {
+            guard let c = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
+                  let d = c.displays.first(where: { $0.displayID == id }) else { await MainActor.run { done(nil) }; return }
+            let me = c.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+            let cfg = SCStreamConfiguration(); cfg.width = d.width * 2; cfg.height = d.height * 2; cfg.showsCursor = false
+            let img = try? await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: d, excludingApplications: me, exceptingWindows: []), configuration: cfg)
+            await MainActor.run { done(img) }
+        }
+    }
+
+    /// Softens a backdrop just enough to read over; heavy blur would hide the glass doing its work.
+    private func softened(_ img: CGImage?) -> CGImage? {
+        guard let img else { return nil }
+        let ci = CIImage(cgImage: img).clampedToExtent().applyingGaussianBlur(sigma: 10).cropped(to: CIImage(cgImage: img).extent)
+        return Self.ciContext.createCGImage(ci, from: ci.extent)
+    }
+    private static let ciContext = CIContext()
 
     private func layoutStatus() {
         let f = screen.frame, h = menuInset
@@ -307,7 +333,11 @@ final class Shell {
                     ?? c.windows.first(where: { ($0.title ?? "") == "Wallpaper" }) else { Log.write("no wallpaper window"); return }
             let cfg = SCStreamConfiguration(); cfg.width = Int(w.frame.width) * 2; cfg.height = Int(w.frame.height) * 2; cfg.showsCursor = false
             guard let img = try? await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: w), configuration: cfg) else { Log.write("wallpaper capture failed"); return }
-            await MainActor.run { self?.wallpaper.contents = img; self?.statusWall.contents = img }
+            await MainActor.run {
+                guard let self else { return }
+                self.wallpaper.contents = img; self.statusWall.contents = img
+                if self.mode != .app { self.withBackdrop { self.setDockBackdrop($0) } } // the Dock's glass refracts this
+            }
         }
     }
 
@@ -466,9 +496,27 @@ final class Shell {
     private func pagePoint(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x + CGFloat(page) * W, y: p.y) }
     private func screenRect(_ pageRect: CGRect) -> CGRect { pageRect.offsetBy(dx: -CGFloat(page) * W, dy: 0) }
 
-    /// Nothing left open on the tablet: the home screen is back immediately.
-    private func returnHomeIfEmpty() {
-        if mode == .app, Date() > launchUntil, Windows.onTablet(cgFrame).isEmpty { showHome(animated: true) }
+    /// Keeps the shell in step with the real windows. The window list is read off the main thread.
+    private func syncWithWindows() {
+        guard mode == .app else { return }
+        let display = cgFrame
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let list = Windows.onTablet(display)
+            DispatchQueue.main.async {
+                guard let self, self.mode == .app else { return }
+                if Date() > self.launchUntil, list.isEmpty { self.showHome(animated: true); return }
+                // A full-screen window owns the whole display, including the status bar area.
+                let full = list.first.map { $0.frame.minY <= display.minY + 1 && $0.frame.height >= display.height - 2 } ?? false
+                guard full != self.fullscreenWindow else { return }
+                self.setFullscreen(full)
+            }
+        }
+    }
+
+    private func setFullscreen(_ on: Bool) {
+        fullscreenWindow = on
+        stateLock.lock(); _fullscreen = on; stateLock.unlock()
+        if on { statusPanel.orderOut(nil); pill.orderOut(nil) } else if !menuShown { statusPanel.orderFrontRegardless(); pill.orderFrontRegardless() }
     }
 
     /// Re-reads macOS's real widgets. They're drawn by macOS, so this only ever mirrors them.
@@ -659,7 +707,8 @@ final class Shell {
     private func openFolder(at pos: (page: Int, index: Int), from rect: CGRect) {
         guard case .folder(let f) = layout.pages[pos.page][pos.index] else { return }
         folderPos = pos
-        let dim = CALayer(); dim.frame = CGRect(x: 0, y: 0, width: W, height: H); dim.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor; dim.opacity = 0
+        let dim = CALayer(); dim.frame = CGRect(x: 0, y: 0, width: W, height: H); dim.opacity = 0; dim.contentsGravity = .resize
+        dim.contents = softened(root.snapshot())
         overlayPanel.orderFrontRegardless(); overlay.addSublayer(dim); folderDim = dim
         dim.spring("opacity", to: 1, damping: 30, stiffness: 200)
 
@@ -764,7 +813,7 @@ final class Shell {
         dockRoot.sublayers?.forEach { $0.removeFromSuperlayer() }; dockTiles = []
         let size: CGFloat = 60, gap: CGFloat = 12, pad: CGFloat = 12, maxApps = max(1, Int((W - 120) / (size + gap)))
         let pinned = Array(layout.dock.prefix(maxApps))
-        let recent = recents.filter { !pinned.contains($0) && apps[$0] != nil }.prefix(max(0, min(3, maxApps - pinned.count)))
+        let recent = (layout.recents ?? []).filter { !pinned.contains($0) && apps[$0] != nil }.prefix(max(0, min(3, maxApps - pinned.count)))
         let count = CGFloat(pinned.count + recent.count)
         let width = count * size + max(0, count - 1) * gap + 2 * pad + (recent.isEmpty ? 0 : 18)
         let height = size + 2 * pad
@@ -789,20 +838,35 @@ final class Shell {
 
     private var dockRect: CGRect { CGRect(x: dockPanel.frame.minX - screen.frame.minX + dockGlass.frame.minX, y: H - dockGlass.frame.maxY, width: dockGlass.frame.width, height: dockGlass.frame.height) }
 
+    private func setDockBackdrop(_ img: CGImage?) {
+        guard let img else { return }
+        let k = CGFloat(img.width) / W
+        let f = dockPanel.frame, y = screen.frame.maxY - f.maxY
+        let crop = CGRect(x: (f.minX - screen.frame.minX) * k, y: y * k, width: f.width * k, height: f.height * k)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        dockWall.frame = CGRect(origin: .zero, size: f.size); dockWall.contents = img.cropping(to: crop)
+        CATransaction.commit()
+    }
+
     private func setDock(_ on: Bool, animated: Bool = true) {
         let glass = dockGlass.layer!
-        if on {
+        let show: () -> Void = { [self] in
             dockPanel.orderFrontRegardless()
             if animated {
                 CATransaction.begin(); CATransaction.setDisableActions(true); glass.setValue(-(dockHeight + 10), forKeyPath: "transform.translation.y"); CATransaction.commit()
-                glass.spring("transform.translation.y", to: 0, damping: 22, stiffness: 280)
+                glass.spring("transform.translation.y", to: 0, damping: 26, stiffness: 300)
             } else { glass.setValue(0, forKeyPath: "transform.translation.y") }
+        }
+        if on {
+            withBackdrop { [weak self] img in self?.setDockBackdrop(img); show() }
         } else if dockPanel.isVisible {
-            glass.spring("transform.translation.y", to: -(dockHeight + 10), damping: 30, stiffness: 320)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
-                guard let self, self._dockRect == nil else { return }
-                self.dockPanel.orderOut(nil)
-            }
+            if animated {
+                glass.spring("transform.translation.y", to: -(dockHeight + 10), damping: 30, stiffness: 320)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
+                    guard let self, self._dockRect == nil else { return }
+                    self.dockPanel.orderOut(nil)
+                }
+            } else { dockPanel.orderOut(nil) }
         }
         publish(dock: .some(on ? dockRect : nil), kb: nil, cc: nil)
     }
@@ -817,11 +881,13 @@ final class Shell {
         kb.onDismiss = { [weak self] in self?.setKeyboard(false) }
         kb.targetPid = { [weak self] in self?.focusPid }
         kb.onSound = { [weak self] k in self?.playSound?(k) }
-        let glass = NSGlassEffectView(frame: CGRect(origin: .zero, size: f.size))
-        glass.wantsLayer = true
-        glass.cornerRadius = 0
+        let host = NSView(frame: CGRect(origin: .zero, size: f.size)); host.wantsLayer = true
+        keyWall = CALayer(); keyWall.frame = host.bounds; keyWall.contentsGravity = .resize; host.layer!.addSublayer(keyWall)
+        let glass = NSGlassEffectView(frame: host.bounds)
+        glass.wantsLayer = true; glass.cornerRadius = 0; glass.style = .regular
         glass.contentView = kb
-        keyPanel.contentView = glass
+        host.addSubview(glass)
+        keyPanel.contentView = host
     }
 
     func setKeyboard(_ on: Bool) {
@@ -831,6 +897,13 @@ final class Shell {
         let l = keyPanel.contentView!.layer!
         if on {
             kb.refreshLabels()
+            withBackdrop { [weak self] img in
+                guard let self, let img else { return }
+                let k = CGFloat(img.width) / self.W
+                CATransaction.begin(); CATransaction.setDisableActions(true)
+                self.keyWall.contents = img.cropping(to: CGRect(x: 0, y: (self.H - h) * k, width: self.W * k, height: h * k))
+                CATransaction.commit()
+            }
             keyPanel.orderFrontRegardless()
             CATransaction.begin(); CATransaction.setDisableActions(true); l.setValue(-h, forKeyPath: "transform.translation.y"); CATransaction.commit()
             l.spring("transform.translation.y", to: 0, damping: 34, stiffness: 300)
@@ -874,7 +947,7 @@ final class Shell {
     private func hideMenuBar() {
         menuTimer?.invalidate()
         menuShown = false
-        statusPanel.orderFrontRegardless()
+        if !fullscreenWindow { statusPanel.orderFrontRegardless() }
     }
 
     /// Icons live in a layer and glass in views above it; they always appear and disappear together.
@@ -904,18 +977,13 @@ final class Shell {
         }
     }
 
+    /// Switches straight to the windowed desktop. Callers run this while something covers the change.
     private func enterApp() {
         mode = .app
-        setDock(false)
-        pill.orderFrontRegardless()
-        CATransaction.begin(); CATransaction.setAnimationDuration(0.2)
-        CATransaction.setCompletionBlock { [weak self] in
-            guard let self, self.mode == .app else { return }
-            self.lowerHome()
-            CATransaction.begin(); CATransaction.setDisableActions(true); self.homeLayer.opacity = 1; CATransaction.commit()
-        }
-        homeLayer.opacity = 0
-        CATransaction.commit()
+        setDock(false, animated: false)
+        if !fullscreenWindow { pill.orderFrontRegardless() }
+        lowerHome()
+        CATransaction.begin(); CATransaction.setDisableActions(true); homeLayer.opacity = 1; CATransaction.commit()
     }
 
     // MARK: launching
@@ -925,12 +993,19 @@ final class Shell {
         return CGRect(x: f.minX, y: f.minY + inset, width: f.width, height: f.height - inset)
     }
 
+    private func openWindow(for a: AppEntry) -> TabletWindow? {
+        let id = Bundle(url: a.url)?.bundleIdentifier
+        let pids = Set(NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == id && id != nil }.map(\.processIdentifier))
+        return Windows.onTablet(cgFrame).first { pids.contains($0.pid) }
+    }
+
     private func launch(_ path: String, from rect: CGRect) {
         guard let a = apps[path] else { return }
         launchUntil = Date().addingTimeInterval(5)
-        recents.removeAll { $0 == path }; recents.insert(path, at: 0)
-        layoutDock()
         exitEdit(); closeFolder()
+        layout.recents = Array(([path] + (layout.recents ?? []).filter { $0 != path }).prefix(6)); save()
+        // Already open on the tablet: just bring it forward, no splash.
+        if let w = openWindow(for: a) { focusPid = w.pid; enterApp(); Windows.raise(w); layoutDock(); return }
 
         // The icon grows into the full screen; the real window replaces it once it's placed.
         let zoom = CALayer(); zoom.place(rect); zoom.cornerRadius = 18; zoom.backgroundColor = NSColor(calibratedWhite: 0.11, alpha: 1).cgColor
@@ -942,29 +1017,32 @@ final class Shell {
         zoom.spring("cornerRadius", to: 0, damping: 28, stiffness: 200)
         glyph.spring("position", to: NSValue(point: CGPoint(x: W / 2, y: H / 2)), damping: 28, stiffness: 200)
 
-        let start = Date()
-        let cfg = NSWorkspace.OpenConfiguration(); cfg.activates = false // never pull focus away from what's happening on the Mac
-        let display = cgFrame, area = usableArea
-        func reveal() {
-            let wait = max(0, 0.4 - Date().timeIntervalSince(start))
-            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
-                guard let self else { return }
-                self.enterApp()
-                CATransaction.begin(); CATransaction.setAnimationDuration(0.22)
-                CATransaction.setCompletionBlock { zoom.removeFromSuperlayer() }
-                zoom.opacity = 0
-                CATransaction.commit()
-            }
+        // One timeline: the splash covers the screen, the desktop changes underneath it,
+        // the window is placed underneath it, and only then does the splash fade once.
+        var covered = false, placed = false
+        func finish() {
+            guard covered && placed else { return }
+            launchUntil = .distantPast
+            CATransaction.begin(); CATransaction.setAnimationDuration(0.2)
+            CATransaction.setCompletionBlock { zoom.removeFromSuperlayer() }
+            zoom.opacity = 0
+            CATransaction.commit()
+            layoutDock()
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { [weak self] in
+            self?.enterApp(); covered = true; finish()
+        }
+        let cfg = NSWorkspace.OpenConfiguration(); cfg.activates = !MacActivity.isBusy
+        let display = cgFrame, area = usableArea
         NSWorkspace.shared.openApplication(at: a.url, configuration: cfg) { app, err in
             guard let app else {
                 Log.write("launch \(a.name) failed: \(String(describing: err))")
-                DispatchQueue.main.async { reveal() }
+                DispatchQueue.main.async { placed = true; finish() }
                 return
             }
             DispatchQueue.main.async { self.focusPid = app.processIdentifier }
             let cascade = Windows.onTablet(display).count
-            Windows.adopt(pid: app.processIdentifier, display: display, area: area, cascade: cascade) { self.launchUntil = .distantPast; reveal() }
+            Windows.adopt(pid: app.processIdentifier, display: display, area: area, cascade: cascade) { placed = true; finish() }
         }
     }
 
@@ -1123,7 +1201,7 @@ final class Shell {
         let display = displayID
         func flip(_ f: CGRect) -> CGRect { CGRect(x: f.minX, y: ccSize.height - f.maxY, width: f.width, height: f.height) }
         func tile(_ f: CGRect, _ symbol: String, _ caption: String, _ color: NSColor, toggle: Bool, state: Bool, active: @escaping () -> Bool, action: @escaping () -> Void) {
-            let g = makeGlass(flip(f), radius: min(34, f.height / 2.4), style: .clear); ccSheet.addSubview(g.view)
+            let g = makeGlass(flip(f), radius: min(34, f.height / 2.4), style: .regular); ccSheet.addSubview(g.view)
             let big = f.height >= 120
             let d: CGFloat = big ? 44 : 40
             let badge = CALayer(); badge.frame = CGRect(x: big ? 16 : (f.width - d) / 2, y: big ? 16 : (f.height - d) / 2, width: d, height: d); badge.cornerRadius = d / 2
@@ -1154,7 +1232,7 @@ final class Shell {
         }
         func slider(_ x: CGFloat, _ symbol: String, get: @escaping () -> Double, set: @escaping (Double) -> Void) {
             let f = CGRect(x: x, y: 0, width: 66, height: ccSize.height)
-            let gv = makeGlass(flip(f), radius: 33, style: .clear); ccSheet.addSubview(gv.view)
+            let gv = makeGlass(flip(f), radius: 33, style: .regular); ccSheet.addSubview(gv.view)
             let fill = CALayer(); fill.backgroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
             let clip = CALayer(); clip.frame = CGRect(origin: .zero, size: f.size); clip.cornerRadius = 33; clip.masksToBounds = true; clip.addSublayer(fill); gv.content.addSublayer(clip)
             let glyph = CALayer(); glyph.frame = CGRect(x: 19, y: f.height - 44, width: 28, height: 26); glyph.contentsGravity = .resizeAspect; glyph.contents = tinted(symbol, 20, .darkGray); gv.content.addSublayer(glyph)
@@ -1191,6 +1269,10 @@ final class Shell {
             DispatchQueue.main.async { self?.tabletBrightness = b; self?.refreshControlCenter() }
         }
         refreshControlCenter()
+        withBackdrop { [weak self] img in
+            guard let self else { return }
+            CATransaction.begin(); CATransaction.setDisableActions(true); self.ccWall.contents = self.softened(img); CATransaction.commit()
+        }
         ccPanel.orderFrontRegardless()
     }
 
@@ -1198,20 +1280,20 @@ final class Shell {
         let p = max(0, min(1, down / (ccSize.height * 0.8)))
         CATransaction.begin(); CATransaction.setDisableActions(true)
         ccSheet.layer?.setValue(ccHiddenOffset * (1 - p), forKeyPath: "transform.translation.y")
-        ccBackdrop.alphaValue = p
+        ccWall.opacity = Float(p)
         CATransaction.commit()
     }
 
     private func openControlCenter() {
         prepareControlCenter()
         ccSheet.layer?.spring("transform.translation.y", to: 0, damping: 24, stiffness: 260)
-        NSAnimationContext.runAnimationGroup { $0.duration = 0.2; ccBackdrop.animator().alphaValue = 1 }
+        ccWall.spring("opacity", to: 1, damping: 30, stiffness: 260)
         publish(dock: nil, kb: nil, cc: true)
     }
 
     private func closeControlCenter() {
         ccSheet.layer?.spring("transform.translation.y", to: ccHiddenOffset, damping: 30, stiffness: 300)
-        NSAnimationContext.runAnimationGroup { $0.duration = 0.2; ccBackdrop.animator().alphaValue = 0 }
+        ccWall.spring("opacity", to: 0, damping: 30, stiffness: 300)
         publish(dock: nil, kb: nil, cc: false)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self, !self._ccOpen else { return }
@@ -1225,10 +1307,10 @@ final class Shell {
 
     /// Runs on the gesture queue at the first finger of a sequence: does the shell own it?
     func captures(_ p: CGPoint, height: CGFloat) -> Bool {
-        if p.y >= height - edgeHeight { return true }
         stateLock.lock(); defer { stateLock.unlock() }
+        if p.y >= height - edgeHeight && !_fullscreen { return true }
         if _ccOpen { return true }
-        if p.y < topEdge && !menuShownSafe { return true } // status bar: Control Center on the right, menu bar on the left
+        if p.y < topEdge && !menuShownSafe && !_fullscreen { return true } // status bar: Control Center on the right, menu bar on the left
         if _mode != .app { return true }
         if let r = _kbRect, r.contains(p) { return true }
         if _dockRect != nil { return true } // a tap outside dismisses the dock
@@ -1284,13 +1366,13 @@ final class Shell {
             touch = .cc
             return
         }
-        if p.y < topEdge && !menuShown { if p.x > W * 0.55 { touch = .topEdge; prepareControlCenter() } else { touch = .menuEdge }; return }
+        if p.y < topEdge && !menuShown && !fullscreenWindow { if p.x > W * 0.55 { touch = .topEdge; prepareControlCenter() } else { touch = .menuEdge }; return }
         if folderPos != nil { touch = folderRect.contains(p) ? .folder : .folderOutside; return }
         if gallery != nil { touch = .gallery; return }
         if let r = kbR, r.contains(p) {
             kb.touchDown(at: CGPoint(x: p.x - r.minX, y: p.y - r.minY)); touch = .keyboard; return
         }
-        if p.y >= H - edgeHeight && dockR?.contains(p) != true { touch = .edge; beginLiveCard(); return }
+        if p.y >= H - edgeHeight && dockR?.contains(p) != true && !fullscreenWindow { touch = .edge; beginLiveCard(); return }
         if let r = dockR {
             if r.contains(p) {
                 let local = CGPoint(x: p.x - r.minX, y: p.y - r.minY)

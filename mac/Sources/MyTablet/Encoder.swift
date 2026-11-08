@@ -31,7 +31,8 @@ final class Encoder {
         set(kVTCompressionPropertyKey_AverageBitRate, bitrate as CFNumber)
         set(kVTCompressionPropertyKey_MaxKeyFrameInterval, 600 as CFNumber)
         set(kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2)
-        set(kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_ITU_R_709_2)
+        // The panel displays sRGB-style gamma; a 709 transfer here makes VideoToolbox lift every shadow.
+        set(kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_sRGB)
         set(kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2)
         VTCompressionSessionPrepareToEncodeFrames(s)
     }

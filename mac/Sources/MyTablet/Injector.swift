@@ -1,7 +1,20 @@
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import CPrivate
 import Foundation
+
+/// Whether a person is working on the Mac itself right now.
+enum MacActivity {
+    private static var last = 0.0
+    /// Typing or clicking on the Mac within the last few seconds. Our own synthetic events carry our process id; hardware events carry 0.
+    static var isBusy: Bool { CFAbsoluteTimeGetCurrent() - last < 4 }
+    static func start() {
+        NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { e in
+            if e.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) == 0 { last = CFAbsoluteTimeGetCurrent() }
+        }
+    }
+}
 
 /// The window under a finger, which is also the tablet's own notion of keyboard focus.
 struct InputTarget { let pid: pid_t; let window: CGWindowID }
@@ -128,14 +141,14 @@ enum HitTest {
     }
 
     /// Replay safety: when set, only this owner's windows can ever receive input.
-    static var onlyOwner: String?
+    static var onlyOwner: Set<String>?
 
     /// Topmost app-owned window at a point, or nil when it's system UI that only the real pointer can drive.
     static func target(at p: CGPoint) -> InputTarget? {
         for w in windows(at: p) {
             // The Dock keeps a transparent display-sized window; only its small visible bar is real UI.
             if w.owner == "Dock" && w.frame.height > 200 { continue }
-            if let only = onlyOwner { return w.owner == only ? InputTarget(pid: w.pid, window: w.id) : nil }
+            if let only = onlyOwner { return only.contains(w.owner) ? InputTarget(pid: w.pid, window: w.id) : nil }
             return systemOwners.contains(w.owner) ? nil : InputTarget(pid: w.pid, window: w.id)
         }
         return nil

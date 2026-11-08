@@ -19,6 +19,7 @@ struct HomeLayout: Codable {
     var dock: [String] = []
     var hidden: [String] = []
     var hiddenWidgets: [String] = []
+    var recents: [String]?
 
     private static var url: URL {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("MyTablet")

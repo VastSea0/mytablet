@@ -160,6 +160,8 @@ final class Session {
             guard let self else { return }
             self.refine += 1
             if self.refine > 5 { self.refineTimer?.cancel(); self.refineTimer = nil; return }
+            // The first settle frame is a keyframe: a clean picture that can't carry ghosts of earlier motion.
+            if self.refine == 1 { self.encoder?.requestKeyFrame() }
             self.submit(latest, Clock.now())
         }
         t.resume(); refineTimer = t

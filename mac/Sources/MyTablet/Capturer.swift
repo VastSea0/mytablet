@@ -22,6 +22,7 @@ final class Capturer: NSObject, SCStreamOutput, SCStreamDelegate {
         cfg.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         cfg.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         cfg.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
+        cfg.colorSpaceName = CGColorSpace.sRGB
         cfg.showsCursor = false
         cfg.queueDepth = 4
         let s = SCStream(filter: SCContentFilter(display: target, excludingWindows: []), configuration: cfg, delegate: self)
