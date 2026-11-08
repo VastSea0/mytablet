@@ -32,8 +32,8 @@ guard let screen = NSScreen.screens.first(where: { $0.localizedName.contains("My
 let w = NSWindow(contentRect: screen.frame.insetBy(dx: 40, dy: 40), styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)
 w.setFrame(screen.visibleFrame.insetBy(dx: 40, dy: 30), display: true)
 let v = V(); w.contentView = v; w.title = "TouchLab"; w.makeKeyAndOrderFront(nil); w.makeFirstResponder(v); app.activate(ignoringOtherApps: true)
-w.level = .floating // stays above real windows so tests can never reach them
-DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.deactivate() }
+if args.contains("--float") { w.level = .floating } // stays above real windows
+if args.contains("--deactivate") { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.deactivate() } }
 log("ready screen=\(screen.frame) backing=\(screen.backingScaleFactor) win=\(w.frame) contentH=\(v.bounds.height)")
 if v.animate { Timer.scheduledTimer(withTimeInterval: 1.0/60, repeats: true) { _ in v.x = (v.x + 5).truncatingRemainder(dividingBy: v.bounds.width - 60); v.needsDisplay = true } }
 app.run()

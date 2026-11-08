@@ -31,10 +31,9 @@ final class Injector {
         return lastHome ?? c
     }
 
-    private func warp(_ p: CGPoint) {
-        CGWarpMouseCursorPosition(p)
-        CGAssociateMouseAndMouseCursorPosition(1)
-    }
+    /// A posted move, not CGWarpMouseCursorPosition: a warp suppresses input for 250 ms,
+    /// which would drop the next touch and freeze the Mac's own trackpad.
+    private func warp(_ p: CGPoint) { move(p) }
 
     func move(_ p: CGPoint) { CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap) }
 
@@ -61,7 +60,7 @@ final class Injector {
         if !holdingPointer { heldFrom = pointer }
         holdingPointer = true
         move(p)
-        usleep(4000)
+        usleep(16000) // gestures route by the settled pointer position
     }
     func release() {
         holdingPointer = false

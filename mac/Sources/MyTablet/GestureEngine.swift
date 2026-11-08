@@ -88,6 +88,20 @@ final class GestureEngine {
         }
     }
     private var inject_target: InputTarget?
+    private var exclusiveMacApp: NSRunningApplication?
+
+    /// Pinches and drags only reach an active app, so the target is active for just that gesture.
+    private func beginExclusive() {
+        guard let t = inject_target, let app = NSRunningApplication(processIdentifier: t.pid) else { return }
+        let mac = NSWorkspace.shared.frontmostApplication
+        if mac?.processIdentifier != t.pid { exclusiveMacApp = mac; app.activate() }
+        focused = t
+    }
+    private func endExclusive() {
+        guard let mac = exclusiveMacApp else { return }
+        exclusiveMacApp = nil
+        q.asyncAfter(deadline: .now() + 0.08) { mac.activate() }
+    }
 
     private func fingerDown(_ p: CGPoint) {
         stopMomentum(sendEnd: true)
@@ -126,6 +140,7 @@ final class GestureEngine {
                 }
                 if held || kind == .control {
                     focused = inject_target ?? focused
+                    beginExclusive()
                     inject.hold(at: start)
                     mode = .dragging
                     inject.mouse(.leftMouseDown, start)
@@ -167,7 +182,7 @@ final class GestureEngine {
         case .scrolling:
             finishScroll()
         case .dragging:
-            inject.mouse(.leftMouseUp, last); inject.release(); mode = .idle
+            inject.mouse(.leftMouseUp, last); inject.release(); endExclusive(); mode = .idle
         case .windowDrag:
             mode = .idle
         case .twoPending, .twoScroll, .pinch, .rotate:
@@ -230,10 +245,10 @@ final class GestureEngine {
     private func cancel() {
         cancelHold()
         switch mode {
-        case .dragging: inject.mouse(.leftMouseUp, last); inject.release()
+        case .dragging: inject.mouse(.leftMouseUp, last); inject.release(); endExclusive()
         case .scrolling, .twoScroll: inject.scroll(at: scrollPoint, dx: 0, dy: 0, phase: .ended)
-        case .pinch: inject.magnify(at: twoLastCentroid, delta: 0, phase: 8); inject.release()
-        case .rotate: inject.rotate(at: twoLastCentroid, degrees: 0, phase: 8); inject.release()
+        case .pinch: inject.magnify(at: twoLastCentroid, delta: 0, phase: 8); inject.release(); endExclusive()
+        case .rotate: inject.rotate(at: twoLastCentroid, degrees: 0, phase: 8); inject.release(); endExclusive()
         default: break
         }
         mode = .idle
@@ -271,10 +286,12 @@ final class GestureEngine {
             let pan = hypot(c.x - twoStartCentroid.x, c.y - twoStartCentroid.y)
             if pinch > 12 && pinch > pan {
                 mode = .pinch; twoLastDist = d
+                beginExclusive()
                 inject.hold(at: c)
                 inject.magnify(at: c, delta: 0, phase: 1)
             } else if turn > 14 && pan < 20 {
                 mode = .rotate; twoLastAngle = a
+                beginExclusive()
                 inject.hold(at: c)
                 inject.rotate(at: c, degrees: 0, phase: 1)
             } else if pan > slop {
@@ -310,9 +327,9 @@ final class GestureEngine {
             if now - lastMoveTime <= 0.08 && hypot(velocity.dx, velocity.dy) >= 60 { startMomentum() }
             mode = .consumed
         case .pinch:
-            inject.magnify(at: twoStartCentroid, delta: 0, phase: 4); inject.release(); mode = .consumed
+            inject.magnify(at: twoStartCentroid, delta: 0, phase: 4); inject.release(); endExclusive(); mode = .consumed
         case .rotate:
-            inject.rotate(at: twoStartCentroid, degrees: 0, phase: 4); inject.release(); mode = .consumed
+            inject.rotate(at: twoStartCentroid, degrees: 0, phase: 4); inject.release(); endExclusive(); mode = .consumed
         default: break
         }
         if e.points.count == 1 { mode = .idle }
@@ -331,8 +348,8 @@ final class GestureEngine {
         cancelHold()
         switch mode {
         case .twoScroll: inject.scroll(at: scrollPoint, dx: 0, dy: 0, phase: .ended)
-        case .pinch: inject.magnify(at: twoStartCentroid, delta: 0, phase: 8); inject.release()
-        case .rotate: inject.rotate(at: twoStartCentroid, degrees: 0, phase: 8); inject.release()
+        case .pinch: inject.magnify(at: twoStartCentroid, delta: 0, phase: 8); inject.release(); endExclusive()
+        case .rotate: inject.rotate(at: twoStartCentroid, degrees: 0, phase: 8); inject.release(); endExclusive()
         default: break
         }
         mode = .system; sysStart = centroid(e); sysLast = sysStart
