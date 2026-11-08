@@ -11,6 +11,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let stateItem = NSMenuItem(title: "Başlatılıyor…", action: nil, keyEquivalent: "")
     private let statsItem = NSMenuItem(title: "—", action: nil, keyEquivalent: "")
     private var layoutItems: [NSMenuItem] = []
+    private var linkItems: [NSMenuItem] = []
 
     func applicationDidFinishLaunching(_ n: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -21,6 +22,12 @@ final class AppController: NSObject, NSApplicationDelegate {
             let it = NSMenuItem(title: l.name, action: #selector(pick(_:)), keyEquivalent: "")
             it.tag = i; it.target = self; it.state = i == layoutIndex ? .on : .off
             m.addItem(it); layoutItems.append(it)
+        }
+        m.addItem(.separator())
+        for (title, mode) in [("Bağlantı: Otomatik", Session.LinkMode.auto), ("Yalnızca USB", .usb), ("Yalnızca Wi-Fi", .wifi)] {
+            let it = NSMenuItem(title: title, action: #selector(pickLink(_:)), keyEquivalent: "")
+            it.representedObject = mode.rawValue; it.target = self; it.state = Session.linkMode == mode ? .on : .off
+            m.addItem(it); linkItems.append(it)
         }
         m.addItem(.separator())
         let reset = NSMenuItem(title: "Ana Ekranı Sıfırla", action: #selector(resetHome), keyEquivalent: "")
@@ -66,6 +73,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         sh.playSound = { [weak s] k in s?.playSound(k) }
         s.start(display: d)
         if let path = ProcessInfo.processInfo.environment["MYTABLET_REPLAY"] { Replay.run(path, into: s.gestures) }
+    }
+
+    @objc private func pickLink(_ s: NSMenuItem) {
+        guard let raw = s.representedObject as? String, let m = Session.LinkMode(rawValue: raw) else { return }
+        Session.linkMode = m
+        for it in linkItems { it.state = it === s ? .on : .off }
+        session?.reconnect()
     }
 
     @objc private func resetHome() { shell?.resetLayout() }

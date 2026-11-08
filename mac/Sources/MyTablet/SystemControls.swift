@@ -61,20 +61,15 @@ enum SystemControls {
         }
     }
 
-    // MARK: Tablet brightness
-    private static let brightnessQ = DispatchQueue(label: "brightness")
-    private static var pending: Int?
+    // MARK: Tablet brightness (travels over the stream link, so it works without a cable)
+    static var sendTabletBrightness: ((Int) -> Void)?
+    private static var lastBrightness = 128
+    static func reportTabletBrightness(_ v: Int) { lastBrightness = v }
     static func setTabletBrightness(_ v: Double) {
-        pending = Int(max(1, min(255, v * 255)))
-        brightnessQ.async {
-            guard let n = pending else { return } // slider moves faster than adb; only the latest value matters
-            pending = nil
-            Adb.run(["shell", "settings put system screen_brightness_mode 0; settings put system screen_brightness \(n)"])
-        }
+        lastBrightness = Int(max(1, min(255, v * 255)))
+        sendTabletBrightness?(lastBrightness)
     }
-    static func tabletBrightness() -> Double {
-        (Double(Adb.run(["shell", "settings get system screen_brightness"]).1.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 128) / 255
-    }
+    static func tabletBrightness() -> Double { Double(lastBrightness) / 255 }
 
     static func screenshot(displayID: CGDirectDisplayID) {
         var n: UInt32 = 0; var ids = [CGDirectDisplayID](repeating: 0, count: 16)

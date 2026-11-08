@@ -16,6 +16,11 @@ bu tabletin 1920×1200 paneline sabit.
 Uygulamayı `open` ile başlat, shell'den başlatınca izinler terminale bağlanır ve dokunma çalışmaz.
 İlk açılışta **Ekran Kaydı** ve **Erişilebilirlik** izinlerini ver. Tablet uygulaması kendini kurar.
 
+## Kablosuz kullanım
+
+Eşleştirme için bir kez USB ile bağla. Sonra iki cihaz aynı ağdayken tablette MyTablet'i açman yeterli; Mac tableti kendisi
+bulur. Mac açık, uygulama çalışır ve kapağı açık olmalı. Menü çubuğundan USB veya Wi-Fi zorlanabilir.
+
 ## Hareketler
 
 | Hareket | Sonuç |

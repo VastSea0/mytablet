@@ -1,6 +1,14 @@
 package dev.mytablet;
 
 import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.net.nsd.NsdManager;
+import android.net.nsd.NsdServiceInfo;
+import android.net.wifi.WifiManager;
+import android.view.Gravity;
+import android.widget.FrameLayout;
+import android.widget.TextView;
 import android.graphics.Color;
 import android.media.MediaCodec;
 import android.media.MediaFormat;
@@ -19,7 +27,11 @@ import android.view.WindowManager;
 
 import java.io.DataInputStream;
 import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.Files;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -37,6 +49,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private Thread server;
     private volatile boolean running, streaming;
     private KeyClicks clicks;
+    private volatile boolean wirelessSession;
+    private TextView status;
+    private WifiManager.WifiLock wifiLock;
+    private NsdManager.RegistrationListener nsdListener;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -47,7 +63,18 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         view.setBackgroundColor(Color.TRANSPARENT);
         view.getHolder().setFixedSize(W, H);
         view.getHolder().addCallback(this);
-        setContentView(view);
+        FrameLayout root = new FrameLayout(this);
+        root.addView(view);
+        status = new TextView(this);
+        status.setTextColor(Color.WHITE);
+        status.setTextSize(20);
+        status.setText("Mac bekleniyor…");
+        root.addView(status, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        setContentView(root);
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "mytablet");
+        wifiLock.setReferenceCounted(false);
+        advertise();
         clicks = new KeyClicks(this);
         view.requestUnbufferedDispatch(InputDevice.SOURCE_TOUCHSCREEN);
         hideBars();
@@ -96,14 +123,79 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         return true;
     }
 
+    private File keyFile() { return new File(getFilesDir(), "pair.key"); }
+
+    private byte[] pairingKey() {
+        try { byte[] k = Files.readAllBytes(keyFile().toPath()); return k.length == 32 ? k : null; }
+        catch (Exception e) { return null; }
+    }
+
+    private void savePairingKey(byte[] data, int len) {
+        if (len != 32) return;
+        try (FileOutputStream o = new FileOutputStream(keyFile())) { o.write(data, 0, len); }
+        catch (Exception e) { Log.w(TAG, "pairing key not saved", e); return; }
+        runOnUiThread(this::advertise);
+    }
+
+    /** Lets the Mac find this tablet by name after its IP address changes. */
+    private void advertise() {
+        if (nsdListener != null || pairingKey() == null) return;
+        String ip = wifiAddress();
+        if (ip == null) return;
+        NsdServiceInfo info = new NsdServiceInfo();
+        info.setServiceName("MyTablet");
+        info.setServiceType("_mytablet._tcp");
+        info.setPort(PORT);
+        info.setAttribute("ip", ip);
+        nsdListener = new NsdManager.RegistrationListener() {
+            @Override public void onRegistrationFailed(NsdServiceInfo i, int e) { Log.w(TAG, "nsd register failed " + e); }
+            @Override public void onUnregistrationFailed(NsdServiceInfo i, int e) { }
+            @Override public void onServiceRegistered(NsdServiceInfo i) { }
+            @Override public void onServiceUnregistered(NsdServiceInfo i) { }
+        };
+        ((NsdManager) getSystemService(Context.NSD_SERVICE)).registerService(info, NsdManager.PROTOCOL_DNS_SD, nsdListener);
+    }
+
+    @SuppressWarnings("deprecation")
+    private String wifiAddress() {
+        int ip = ((WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE)).getConnectionInfo().getIpAddress();
+        if (ip == 0) return null;
+        return (ip & 255) + "." + ((ip >> 8) & 255) + "." + ((ip >> 16) & 255) + "." + ((ip >> 24) & 255);
+    }
+
+    private void setStatus(boolean visible) { runOnUiThread(() -> status.setVisibility(visible ? View.VISIBLE : View.GONE)); }
+
+    private int readBrightness() {
+        try { return Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS); }
+        catch (Exception e) { return 128; }
+    }
+
+    private void applyBrightness(int v) {
+        try {
+            Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE, 0);
+            Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, v);
+        } catch (Exception e) { Log.w(TAG, "brightness unchanged", e); }
+    }
+
     private void serve() {
-        try (ServerSocket ss = new ServerSocket(PORT, 1, InetAddress.getLoopbackAddress())) {
+        try (ServerSocket ss = new ServerSocket(PORT, 1)) {
             ss.setReuseAddress(true);
             while (running) {
                 try (Socket s = ss.accept()) {
                     s.setTcpNoDelay(true);
-                    s.getOutputStream().write(0x4D);
-                    runSession(s);
+                    boolean local = s.getInetAddress().isLoopbackAddress();
+                    InputStream in; OutputStream out;
+                    if (local) { in = s.getInputStream(); out = s.getOutputStream(); }
+                    else {
+                        // Anything arriving over the network must prove it holds the pairing key first.
+                        byte[] key = pairingKey();
+                        if (key == null) continue;
+                        SecureLink link = SecureLink.accept(s, key);
+                        in = link.in; out = link.out;
+                    }
+                    wirelessSession = !local;
+                    out.write(0x4D);
+                    runSession(in, out);
                 } catch (Exception e) { Log.w(TAG, "session ended", e); }
             }
         } catch (Exception e) { Log.e(TAG, "server", e); }
@@ -118,15 +210,22 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         catch (SecurityException e) { Log.w(TAG, "edge gestures unchanged", e); }
     }
 
-    @Override protected void onStop() { setEdgeGestures(true); super.onStop(); }
+    @Override protected void onStop() {
+        setEdgeGestures(true);
+        // With no cable the Mac can't bring this app back, so it does it itself.
+        if (streaming && wirelessSession) startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        super.onStop();
+    }
     @Override protected void onStart() { super.onStart(); if (streaming) setEdgeGestures(false); }
 
-    private void runSession(Socket s) throws Exception {
+    private void runSession(InputStream socketIn, OutputStream socketOut) throws Exception {
         while (surface == null) Thread.sleep(50);
         streaming = true;
         setEdgeGestures(false);
         outbox.clear();
-        final OutputStream os = s.getOutputStream();
+        final OutputStream os = socketOut;
+        if (wirelessSession) wifiLock.acquire();
+        outbox.offer(ByteBuffer.allocate(5).put((byte) 4).putInt(readBrightness()).array());
         Thread writer = new Thread(() -> {
             try { while (true) { byte[] p = outbox.take(); os.write(p); } }
             catch (Exception ignored) { }
@@ -162,7 +261,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         out.start();
 
         try {
-            DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream(), 1 << 18));
+            DataInputStream in = new DataInputStream(new BufferedInputStream(socketIn, 1 << 18));
             byte[] data = new byte[1 << 20];
             while (true) {
                 int type = in.readUnsignedByte();
@@ -173,6 +272,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 if (len > data.length) data = new byte[len * 2];
                 in.readFully(data, 0, len);
                 if (type == 3) { clicks.play(seq); continue; }
+                if (type == 4) { applyBrightness(seq); continue; }
+                if (type == 5) { savePairingKey(data, len); continue; }
                 if (type == 2) {
                     outbox.offer(ByteBuffer.allocate(9).put((byte) 3).putLong(ts).array());
                     continue;
@@ -187,7 +288,9 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             }
         } finally {
             streaming = false;
+            if (wifiLock.isHeld()) wifiLock.release();
             setEdgeGestures(true);
+            setStatus(true);
             live.set(false);
             writer.interrupt();
             out.join(500);
@@ -203,6 +306,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             try { i = codec.dequeueOutputBuffer(info, 10000); } catch (IllegalStateException e) { return; }
             if (i < 0) continue;
             codec.releaseOutputBuffer(i, true);
+            if (status.getVisibility() == View.VISIBLE) setStatus(false);
             int seq = (int) (info.presentationTimeUs / 1000);
             outbox.offer(ByteBuffer.allocate(13).put((byte) 2).putInt(seq).putLong(System.nanoTime()).array());
         }

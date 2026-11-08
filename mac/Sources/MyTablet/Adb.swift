@@ -26,9 +26,17 @@ enum Adb {
         let r = run(["install", "-r", "-g", apk.path]); Log.write("adb install: \(r.1)")
         run(["shell", "echo \(tag) > /data/local/tmp/mytablet.tag"])
     }
+    static func wifiAddress() -> String? {
+        let out = run(["shell", "ip -f inet addr show wlan0"]).1
+        guard let r = out.range(of: #"inet (\d+\.\d+\.\d+\.\d+)"#, options: .regularExpression) else { return nil }
+        return String(out[r].dropFirst(5))
+    }
+
     static func launchReceiver(port: UInt16) {
         run(["forward", "tcp:\(port)", "tcp:\(port)"])
         run(["shell", "pm grant dev.mytablet android.permission.WRITE_SECURE_SETTINGS"]) // lets the receiver switch off Android's edge gestures
+        // Granted once over USB, these let the receiver manage itself when no cable is attached.
+        run(["shell", "appops set dev.mytablet WRITE_SETTINGS allow; appops set dev.mytablet SYSTEM_ALERT_WINDOW allow"])
         run(["shell", "input keyevent KEYCODE_WAKEUP; am start -n dev.mytablet/.MainActivity"])
     }
 }

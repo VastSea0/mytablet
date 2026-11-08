@@ -9,6 +9,8 @@
 <key>CFBundleShortVersionString</key><string>1.0</string>
 <key>NSAppleEventsUsageDescription</key><string>Kontrol Merkezi'nden koyu modu değiştirmek için gerekli.</string>
 <key>NSBluetoothAlwaysUsageDescription</key><string>Kontrol Merkezi'nden Bluetooth'u açıp kapatmak için gerekli.</string>
+<key>NSLocalNetworkUsageDescription</key><string>Tabletle Wi-Fi üzerinden bağlanmak için gerekli.</string>
+<key>NSBonjourServices</key><array><string>_mytablet._tcp</string></array>
 <key>LSUIElement</key><true/>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSScreenCaptureUsageDescription</key><string>Sanal tablet ekranını tablete aktarmak için gerekli.</string>

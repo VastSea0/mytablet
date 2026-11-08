@@ -9,6 +9,8 @@ final class Encoder {
     private var session: VTCompressionSession?
     private var forceKey = true
     var onFrame: ((EncodedFrame) -> Void)?
+    /// The encoder may skip a frame to hold its bitrate; the pipeline has to get that credit back.
+    var onDropped: (() -> Void)?
 
     init(width: Int, height: Int, bitrate: Int) throws {
         let spec = [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true,
@@ -39,6 +41,11 @@ final class Encoder {
 
     func requestKeyFrame() { forceKey = true }
 
+    func setBitrate(_ bps: Int) {
+        guard let session else { return }
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bps as CFNumber)
+    }
+
     func encode(_ pb: CVPixelBuffer, captureNs: UInt64) {
         guard let session else { return }
         let pts = CMTime(value: Int64(captureNs), timescale: 1_000_000_000)
@@ -46,7 +53,8 @@ final class Encoder {
         if forceKey { props = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary; forceKey = false }
         VTCompressionSessionEncodeFrame(session, imageBuffer: pb, presentationTimeStamp: pts, duration: .invalid,
                                         frameProperties: props, infoFlagsOut: nil) { [weak self] status, _, sample in
-            guard status == noErr, let sample, let self else { return }
+            guard let self else { return }
+            guard status == noErr, let sample else { self.onDropped?(); return }
             self.deliver(sample, captureNs: captureNs)
         }
     }

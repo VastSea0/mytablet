@@ -13,6 +13,8 @@ The resolution is currently fixed to that tablet's 1920×1200 panel.
 
 - **Streaming:** H.264 through `adb` with credit-based flow control. About 20 ms from captured frame to
   decoded frame on the test hardware, 50–57 fps under continuous motion.
+- **Wireless:** after one USB connection the tablet works over Wi-Fi, with AES-256-GCM encryption, mutual authentication
+  and bitrate that adapts to the network. Unplugging switches to Wi-Fi; plugging back in returns to USB.
 - **Sharp text:** the virtual display maps 1:1 to the panel, and still frames are re-encoded until they settle.
 - **Touch:** tap, double tap, scroll with momentum, press-and-drag, long press for secondary click, two-finger
   scroll, pinch and rotate.
@@ -42,6 +44,12 @@ Grant **Screen Recording** and **Accessibility** on first launch. The receiver A
 
 Signing picks your first `Apple Development` certificate, or set `MYTABLET_SIGN_IDENTITY`. Without one the app is
 ad-hoc signed and macOS will ask for the permissions again after every build.
+
+## Wireless use
+
+Connect by USB once to pair. After that, open MyTablet on the tablet while both devices are on the same network; the Mac
+finds it by itself. The Mac must stay on with the app running and its lid open. The menu bar item can force USB or Wi-Fi.
+Expect roughly 45–55 fps at 55–90 ms on a weak 2.4 GHz link; 5 GHz gives the tablet much more room.
 
 ## Gestures
 
