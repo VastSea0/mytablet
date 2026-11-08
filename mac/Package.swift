@@ -2,7 +2,7 @@
 import PackageDescription
 let package = Package(
     name: "MyTablet",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("26.0")],
     targets: [
         .target(name: "CPrivate", path: "Sources/CPrivate"),
         .executableTarget(name: "MyTablet", dependencies: ["CPrivate"], path: "Sources/MyTablet",

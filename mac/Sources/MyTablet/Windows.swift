@@ -76,26 +76,28 @@ enum Windows {
         return CGRect(origin: pt, size: sz)
     }
 
-    static func fill(_ el: AXUIElement, area: CGRect) {
-        var o = area.origin, s = area.size
-        // Position first so the size isn't clamped by the old screen; then position again in case the app resisted.
-        if let p = AXValueCreate(.cgPoint, &o) { AXUIElementSetAttributeValue(el, kAXPositionAttribute as CFString, p) }
-        if let z = AXValueCreate(.cgSize, &s) { AXUIElementSetAttributeValue(el, kAXSizeAttribute as CFString, z) }
+    /// iPadOS 26 windowing: a new window keeps its own size, fits on screen, and cascades over the others.
+    private static func arrange(_ el: AXUIElement, area: CGRect, cascade: Int) {
+        guard let f = frame(of: el) else { return }
+        var size = CGSize(width: min(f.width, area.width * 0.92), height: min(f.height, area.height * 0.92))
+        if let z = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(el, kAXSizeAttribute as CFString, z) }
+        let actual = frame(of: el)?.size ?? size
+        let step = CGFloat(cascade % 6) * 26
+        var o = CGPoint(x: area.midX - actual.width / 2 + step - 26, y: max(area.minY + 8, area.midY - actual.height / 2 + step - 26))
         if let p = AXValueCreate(.cgPoint, &o) { AXUIElementSetAttributeValue(el, kAXPositionAttribute as CFString, p) }
     }
 
-    /// Waits for the app's window, brings it to the tablet and fills the usable area.
-    static func adopt(pid: pid_t, display: CGRect, area: CGRect, completion: @escaping () -> Void) {
+    /// Waits for the app's window and brings it to the tablet. A window already there is left where it is.
+    static func adopt(pid: pid_t, display: CGRect, area: CGRect, cascade: Int, completion: @escaping () -> Void) {
         DispatchQueue.global(qos: .userInteractive).async {
             for _ in 0..<50 {
                 let ws = axWindows(pid)
-                if let onTablet = ws.first(where: { frame(of: $0).map { display.contains(CGPoint(x: $0.midX, y: $0.midY)) } ?? false }) {
-                    fill(onTablet, area: area)
-                    AXUIElementPerformAction(onTablet, kAXRaiseAction as CFString)
+                if let here = ws.first(where: { frame(of: $0).map { display.contains(CGPoint(x: $0.midX, y: $0.midY)) } ?? false }) {
+                    AXUIElementPerformAction(here, kAXRaiseAction as CFString)
                     DispatchQueue.main.async(execute: completion); return
                 }
                 if let first = ws.first {
-                    fill(first, area: area)
+                    arrange(first, area: area, cascade: cascade)
                     AXUIElementPerformAction(first, kAXRaiseAction as CFString)
                     DispatchQueue.main.async(execute: completion); return
                 }

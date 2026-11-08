@@ -27,7 +27,7 @@ The resolution is currently fixed to that tablet's 1920×1200 panel.
 
 ## Build and run
 
-Requires macOS 14+, Xcode, the Android SDK (`build-tools;35.0.0`, `platforms;android-34`, `platform-tools`)
+Requires macOS 26+, Xcode, the Android SDK (`build-tools;35.0.0`, `platforms;android-34`, `platform-tools`)
 and a tablet with USB debugging enabled.
 
     ./build.sh

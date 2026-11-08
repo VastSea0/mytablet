@@ -51,7 +51,6 @@ final class KeyboardView: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame); wantsLayer = true
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.13, alpha: 0.98).cgColor
         layer?.isGeometryFlipped = false
         build()
     }
@@ -65,7 +64,7 @@ final class KeyboardView: NSView {
             var x = pad
             for key in row {
                 let f = CGRect(x: x, y: pad + CGFloat(r) * rowH, width: key.weight * unit - pad, height: rowH - pad)
-                let l = CALayer(); l.frame = f; l.cornerRadius = 7
+                let l = CALayer(); l.frame = f; l.cornerRadius = 12
                 l.backgroundColor = capColor(key, false)
                 let t = CATextLayer(); t.contentsScale = 2; t.alignmentMode = .center
                 t.font = NSFont.systemFont(ofSize: 18); t.fontSize = key.fixed == "return" ? 14 : 18
@@ -80,8 +79,8 @@ final class KeyboardView: NSView {
     }
 
     private func capColor(_ k: Key, _ down: Bool) -> CGColor {
-        if down { return NSColor(calibratedWhite: 0.55, alpha: 1).cgColor }
-        return NSColor(calibratedWhite: k.fixed != nil && k.code != 49 ? 0.24 : 0.36, alpha: 1).cgColor
+        if down { return NSColor.white.withAlphaComponent(0.62).cgColor }
+        return NSColor.white.withAlphaComponent(k.fixed != nil && k.code != 49 ? 0.12 : 0.24).cgColor
     }
 
     func refreshLabels() {
