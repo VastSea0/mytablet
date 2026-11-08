@@ -42,7 +42,8 @@ enum Windows {
     }
 
     static func raise(_ w: TabletWindow) {
-        if !MacActivity.isBusy { NSRunningApplication(processIdentifier: w.pid)?.activate() }
+        // Quietly: the tablet's focus is its own, whatever the Mac is doing.
+        BackgroundInput.makeKey(InputTarget(pid: w.pid, window: w.id, origin: w.frame.origin))
         guard let el = element(for: w) else { return }
         AXUIElementSetAttributeValue(el, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(el, kAXRaiseAction as CFString)
@@ -50,6 +51,13 @@ enum Windows {
 
     private static func element(_ t: InputTarget) -> AXUIElement? {
         axWindows(t.pid).first { var i: CGWindowID = 0; return _AXUIElementGetWindow($0, &i) == .success && i == t.window }
+    }
+
+    static func topOnTablet(_ display: CGRect) -> CGWindowID? { onTablet(display).first?.id }
+
+    static func raiseQuietly(_ t: InputTarget) {
+        guard let el = element(t) else { return }
+        AXUIElementPerformAction(el, kAXRaiseAction as CFString)
     }
 
     static func origin(_ t: InputTarget) -> CGPoint? { element(t).flatMap(frame(of:))?.origin }

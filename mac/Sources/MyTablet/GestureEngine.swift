@@ -38,7 +38,8 @@ final class GestureEngine {
 
     private let slop = 6.0           // points
     private let holdDrag = 0.22      // seconds before a move means drag instead of scroll
-    private let longPress = 0.55
+    private var longPress: Double { [0.4, 0.55, 0.8][Prefs.current.longPress] }
+    private var scrollGain: Double { [0.75, 1.0, 1.45][Prefs.current.scrollSpeed] }
 
     func setFrame(_ r: CGRect) { q.async { self.frame = r; self.inject.tabletFrame = r } }
     /// Display arrangement can change at any time, so bounds are re-read at the start of each touch.
@@ -77,6 +78,14 @@ final class GestureEngine {
     private var scrollPoint = CGPoint.zero
     /// Remembers what the Mac is doing so a tablet tap can't take its focus away.
     private func keepMacFocus(_ action: () -> Void) {
+        if let t = inject.target {
+            // Delivered straight to the window: nothing on the Mac changes, so there's nothing to give back.
+            focused = t
+            BackgroundInput.makeKey(t)
+            if Windows.topOnTablet(frame) != t.window { Windows.raiseQuietly(t) }
+            action()
+            return
+        }
         let macApp = NSWorkspace.shared.frontmostApplication
         let target = inject_target
         // macOS swallows the first click on an inactive app, so the target goes active for the click itself.
@@ -101,6 +110,7 @@ final class GestureEngine {
 
     /// Pinches and drags only reach an active app, so the target is active for just that gesture.
     private func beginExclusive() {
+        if let t = inject.target { focused = t; BackgroundInput.makeKey(t); return }
         guard let t = inject_target, let app = NSRunningApplication(processIdentifier: t.pid) else { return }
         let mac = NSWorkspace.shared.frontmostApplication
         if mac?.processIdentifier != t.pid { exclusiveMacApp = mac; app.activate() }
@@ -119,6 +129,7 @@ final class GestureEngine {
         scrollPoint = p
         inject_target = HitTest.target(at: p)
         if inject_target == nil && HitTest.onlyOwner != nil { mode = .consumed; return } // replay never touches anything else
+        inject.target = Prefs.current.independentInput && BackgroundInput.available ? inject_target : nil
         let t = DispatchSource.makeTimerSource(queue: q)
         t.schedule(deadline: .now() + longPress)
         t.setEventHandler { [weak self] in self?.longPressFired() }
@@ -150,6 +161,7 @@ final class GestureEngine {
                 }
                 if held || kind == .control {
                     focused = inject_target ?? focused
+                    if kind != .control && held && HitTest.startsDragSession(at: start) { inject.target = nil } // file-style drags need the real pointer
                     beginExclusive()
                     inject.hold(at: start)
                     mode = .dragging
@@ -177,7 +189,7 @@ final class GestureEngine {
 
     private func trackScroll(_ p: CGPoint) {
         let t = now, dt = max(t - lastMoveTime, 0.001)
-        let dx = p.x - last.x, dy = p.y - last.y
+        let dx = (p.x - last.x) * scrollGain, dy = (p.y - last.y) * scrollGain
         inject.scroll(at: scrollPoint, dx: dx, dy: dy, phase: .changed)
         velocity = CGVector(dx: velocity.dx * 0.6 + dx / dt * 0.4, dy: velocity.dy * 0.6 + dy / dt * 0.4)
         last = p; lastMoveTime = t
@@ -209,6 +221,7 @@ final class GestureEngine {
         q.async { [self] in
             let g = CGPoint(x: frame.minX + local.x, y: frame.minY + local.y)
             inject_target = HitTest.target(at: g)
+            inject.target = Prefs.current.independentInput && BackgroundInput.available ? inject_target : nil
             tap(at: g)
         }
     }
@@ -311,7 +324,7 @@ final class GestureEngine {
             }
         case .twoScroll:
             let t = now, dt = max(t - lastMoveTime, 0.001)
-            let dx = c.x - twoLastCentroid.x, dy = c.y - twoLastCentroid.y
+            let dx = (c.x - twoLastCentroid.x) * scrollGain, dy = (c.y - twoLastCentroid.y) * scrollGain
             inject.scroll(at: scrollPoint, dx: dx, dy: dy, phase: .changed)
             velocity = CGVector(dx: velocity.dx * 0.6 + dx / dt * 0.4, dy: velocity.dy * 0.6 + dy / dt * 0.4)
             twoLastCentroid = c; lastMoveTime = t

@@ -18,7 +18,10 @@ The resolution is currently fixed to that tablet's 1920×1200 panel.
 - **Sharp text:** the virtual display maps 1:1 to the panel, and still frames are re-encoded until they settle.
 - **Touch:** tap, double tap, scroll with momentum, press-and-drag, long press for secondary click, two-finger
   scroll, pinch and rotate.
-- **Independent input:** tablet taps and scrolls return the Mac's pointer immediately.
+- **Use both at once:** tablet input is delivered straight to the window, so the Mac's pointer, active app and typing are
+  not affected.
+- **Settings app:** glass style per surface, icon and Dock size, labels, recent apps, scroll speed, long press, key sounds,
+  screen area and connection, all applied live.
 - **Liquid Glass:** Dock, Control Center, folders, keyboard and widgets use Apple's own `NSGlassEffectView` with its clear,
   edge-refracting internal variant (the same look as the system Dock), placed over a backdrop in their own window, because
   the effect only refracts content in the same window.
@@ -67,23 +70,21 @@ Expect roughly 45–55 fps at 55–90 ms on a weak 2.4 GHz link; 5 GHz gives the
 
 ## How it works
 
-macOS has one pointer and no public way to inject direct touches. Pointer events posted to a specific process are
-dropped (measured on macOS 27), so each click and scroll moves the pointer to the finger and straight back
-(about 10 ms for a click, 0.3 ms for a scroll event). Keyboard input goes directly to the tablet's focused app,
-and window dragging uses Accessibility, so neither touches the pointer.
+Touches are delivered to the window under the finger with SkyLight's `SLEventPostToPid`, using window-local coordinates
+(required on macOS 27), and the window is made key without activating its app. The Mac's pointer and frontmost app stay
+untouched. The field numbers and focus record follow [Cua Driver](https://github.com/trycua/cua) (MIT) and yabai. System UI
+with no window of its own (the menu bar) still uses the shared pointer for an instant.
 
 ## Known limitations
 
-- Pinches and drags hold the Mac's pointer for as long as they last, because macOS routes them by the live pointer
-  position. They also make the target app active for that time.
-- A tapped app stays active so menus and text fields work. If you typed or clicked on the Mac in the last 4 seconds,
-  focus returns to the Mac's app instead.
+- macOS tracks one open menu at a time, so a menu open on the tablet holds the Mac's keyboard focus until it closes.
+- Dragging files or list rows still needs the real pointer, because AppKit tracks drag sessions with it.
 - To stop Android's bars appearing over the stream, the receiver turns the `user_setup_complete` secure setting off while
   streaming and back on when streaming stops. If the tablet loses power mid-session and acts oddly, run
   `adb shell settings put secure user_setup_complete 1`.
 - Widgets are mirrored images: you can't interact inside one, and a tap opens its app for known widgets only.
 - No Split View or portrait orientation yet.
-- Private APIs are used (`CGVirtualDisplay`, the glass view's `_variant`, gesture event fields, `_AXUIElementGetWindow`, IOBluetooth power
+- Private APIs are used (`CGVirtualDisplay`, the glass view's `_variant`, `SLEventPostToPid` and related SkyLight calls, gesture event fields, `_AXUIElementGetWindow`, IOBluetooth power
   control), so a macOS update can break them.
 - Baseline H.264 is used because the T618 decoder holds frames with other profiles.
 

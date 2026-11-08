@@ -21,16 +21,17 @@ private final class ShellPanel: NSPanel {
 /// AppKit's public styles only offer the frosted look. The clear, edge-refracting material the system Dock
 /// uses is one of the view's internal variants, so it's set when available and falls back to `.clear`.
 let lensGlassVariant = 11
-func applyLens(_ g: NSGlassEffectView) {
-    if g.responds(to: Selector(("set_variant:"))) { g.setValue(lensGlassVariant, forKey: "_variant") } else { g.style = .clear }
+/// `lens` is the clear system-Dock look; otherwise the standard frosted glass.
+func configureGlass(_ g: NSGlassEffectView, lens: Bool) {
+    guard g.responds(to: Selector(("set_variant:"))) else { g.style = lens ? .clear : .regular; return }
+    g.setValue(lens ? lensGlassVariant : 0, forKey: "_variant")
 }
 
-private func makeGlass(_ frame: CGRect, radius: CGFloat, style: NSGlassEffectView.Style = .regular, lens: Bool = true) -> (view: NSGlassEffectView, content: CALayer) {
+private func makeGlass(_ frame: CGRect, radius: CGFloat, lens: Bool) -> (view: NSGlassEffectView, content: CALayer) {
     let g = NSGlassEffectView(frame: frame)
-    if lens { applyLens(g) }
+    configureGlass(g, lens: lens)
     g.wantsLayer = true
     g.cornerRadius = radius
-    if !lens { g.style = style }
     let host = NSView(frame: CGRect(origin: .zero, size: frame.size)); host.wantsLayer = true
     host.autoresizingMask = [.width, .height]
     g.contentView = host
@@ -112,8 +113,13 @@ final class Shell {
     private var apps: [String: AppEntry] = [:], layout = HomeLayout()
     private var tileLayers: [String: CALayer] = [:]
     private var tileFrames: [String: CGRect] = [:]     // page-space frames
-    private let icon: CGFloat = 76, cellW: CGFloat = 132, cellH: CGFloat = 122, gridTop: CGFloat = 52
-    private let dockHeight: CGFloat = 96
+    private var icon: CGFloat { [64, 76, 90][Prefs.current.iconSize] }
+    private var cellW: CGFloat { icon + 56 }
+    private var cellH: CGFloat { icon + 46 }
+    private let gridTop: CGFloat = 52
+    private var dockIcon: CGFloat { [50, 60, 70][Prefs.current.dockSize] }
+    private var dockHeight: CGFloat { dockIcon + 36 }
+    private var shownRecents: [String] { Prefs.current.dockRecents ? (layout.recents ?? []) : [] }
     private var cols = 6, rows = 3, page = 0
     private var pageOffset: CGFloat = 0
     private var editing = false
@@ -142,7 +148,7 @@ final class Shell {
 
     private enum Touch {
         case none, edge, topEdge, menuEdge, home, dock(DockTile?), keyboard, switcherPan, card(Int)
-        case drag(HomeItem), folder, folderOutside, gallery, cc, ccSlider(Int)
+        case drag(HomeItem), settings, settingsOutside, folder, folderOutside, gallery, cc, ccSlider(Int)
     }
     private var touch = Touch.none
     private var downPoint = CGPoint.zero, downTime = 0.0, lastPoint = CGPoint.zero, panBase: CGFloat = 0, dragging = false
@@ -179,15 +185,25 @@ final class Shell {
     }
 
     private func reloadApps() {
-        let list = AppCatalog.installed()
+        var list = AppCatalog.installed()
+        if let e = settingsEntry() { list.insert(e, at: 0) }
         apps = Dictionary(list.map { ($0.url.path, $0) }, uniquingKeysWith: { a, _ in a })
         let dockDefault = AppCatalog.dockApps().map(\.url.path).filter { apps[$0] != nil }
         layout = HomeLayout.load() ?? HomeLayout()
         layout.reconcile(installed: list.map(\.url.path), dockDefault: dockDefault)
+        if !UserDefaults.standard.bool(forKey: "settingsPlacedV2"), let pos = index(of: "a:" + settingsPath) {
+            // First run: Settings starts on the first page, right after the widgets.
+            let item = layout.pages[pos.page].remove(at: pos.index)
+            let after = layout.pages[0].prefix { if case .widget = $0 { return true }; return false }.count
+            layout.pages[0].insert(item, at: after)
+            UserDefaults.standard.set(true, forKey: "settingsPlacedV2")
+            layout.save()
+        }
     }
 
     func resetLayout() {
         HomeLayout.reset()
+        UserDefaults.standard.set(false, forKey: "settingsPlacedV2")
         reloadApps()
         page = 0
         rebuildHome(); layoutDock()
@@ -217,7 +233,7 @@ final class Shell {
         dockPanel = panel(.statusBar + 1)
         let dockHost = NSView(); dockHost.wantsLayer = true
         dockPanel.contentView = dockHost
-        let dg = makeGlass(CGRect(x: 0, y: 0, width: 400, height: 80), radius: 30)
+        let dg = makeGlass(CGRect(x: 0, y: 0, width: 400, height: 80), radius: 30, lens: true)
         dockGlass = dg.view; dockRoot = dg.content
         dockWall = CALayer(); dockWall.contentsGravity = .resize
         dockHost.layer!.addSublayer(dockWall)
@@ -397,7 +413,7 @@ final class Shell {
             l.addSublayer(label(apps[p]?.name ?? "", width: f.width, y: f.height + 6))
         case .folder(let folder):
             // The glass itself lives in `glassHost`, above the page layers; this holds the mini icons.
-            let g = makeGlass(glassRect(f), radius: 20)
+            let g = makeGlass(glassRect(f), radius: 20, lens: Prefs.current.folderLens)
             glassHost.addSubview(g.view); folderGlass[item.key] = g.view
             let mini = (f.width - 20) / 3
             for (i, p) in folder.apps.prefix(9).enumerated() {
@@ -411,10 +427,7 @@ final class Shell {
             let size = liveWidgets[title]?.frame.size ?? f.size
             let k = min(f.width / size.width, f.height / size.height)
             let fit = CGRect(x: f.midX - size.width * k / 2, y: f.midY - size.height * k / 2, width: size.width * k, height: size.height * k)
-            let g = makeGlass(glassRect(fit), radius: 24 * k)
-            // Clear glass needs a dark layer for macOS's white widget text to stay readable; the rim stays glass.
-            let shade = CALayer(); shade.frame = g.content.bounds; shade.cornerRadius = 24 * k; shade.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
-            g.content.addSublayer(shade)
+            let g = makeGlass(glassRect(fit), radius: 24 * k, lens: Prefs.current.widgetLens)
             glassHost.addSubview(g.view); folderGlass[item.key] = g.view
             let c = CALayer(); c.frame = g.content.bounds; c.contents = widgetImages[title]; c.contentsGravity = .resizeAspect
             g.content.addSublayer(c); widgetLayers[item.key] = c
@@ -426,6 +439,7 @@ final class Shell {
         let minus = CALayer(); minus.frame = CGRect(x: 6, y: 11, width: 12, height: 2); minus.backgroundColor = NSColor.white.cgColor; badge.addSublayer(minus)
         l.addSublayer(badge)
         if editing { wiggle(l) }
+        if !Prefs.current.labels { l.sublayers?.filter { $0 is CATextLayer }.forEach { $0.isHidden = true } }
         return l
     }
 
@@ -728,7 +742,7 @@ final class Shell {
         let perRow = 5, cell: CGFloat = 104, rowsN = max(1, Int(ceil(Double(f.apps.count) / Double(perRow))))
         let target = CGRect(x: (W - CGFloat(perRow) * cell - 48) / 2, y: (H - CGFloat(rowsN) * 112 - 92) / 2, width: CGFloat(perRow) * cell + 48, height: CGFloat(rowsN) * 112 + 92)
         // Real glass grows out of the folder icon.
-        let g = makeGlass(glassRect(target).offsetBy(dx: 0, dy: 0), radius: 38)
+        let g = makeGlass(glassRect(target).offsetBy(dx: 0, dy: 0), radius: 38, lens: Prefs.current.folderLens)
         overlayPanel.contentView?.addSubview(g.view); folderPanel = g.view; folderRect = target
         let p = g.content
         let title = text(22, .bold); title.alignmentMode = .center; title.string = f.name
@@ -819,16 +833,128 @@ final class Shell {
         let m = mode; mode = .home; refreshWidgets(); mode = m
     }
 
+    // MARK: Settings app
+
+    /// Hooks into the Mac side of the app; set by AppController.
+    var layoutIndex: (() -> Int)?
+    var setLayoutIndex: ((Int) -> Void)?
+    var setLinkMode: ((Session.LinkMode) -> Void)?
+
+    private let settingsPath = "/MyTablet/Ayarlar.app"
+    private var settingsPanel: SettingsPanel?, settingsGlass: NSGlassEffectView?, settingsDim: CALayer?
+
+    private func settingsEntry() -> AppEntry? {
+        let size = NSSize(width: 256, height: 256)
+        let img = NSImage(size: size, flipped: false) { r in
+            NSGradient(starting: NSColor(calibratedWhite: 0.62, alpha: 1), ending: NSColor(calibratedWhite: 0.38, alpha: 1))?
+                .draw(in: NSBezierPath(roundedRect: r.insetBy(dx: 14, dy: 14), xRadius: 52, yRadius: 52), angle: -90)
+            if let sym = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 120, weight: .semibold)) {
+                let tinted = NSImage(size: sym.size, flipped: false) { q in sym.draw(in: q); NSColor.white.set(); q.fill(using: .sourceIn); return true }
+                tinted.draw(in: CGRect(x: (r.width - sym.size.width) / 2, y: (r.height - sym.size.height) / 2, width: sym.size.width, height: sym.size.height))
+            }
+            return true
+        }
+        guard let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        return AppEntry(name: "Ayarlar", url: URL(fileURLWithPath: settingsPath), icon: cg)
+    }
+
+    private func prefSeg(_ title: String, _ options: [String], _ key: WritableKeyPath<ShellPrefs, Int>) -> SettingsPanel.Row {
+        .segmented(title, options, get: { Prefs.current[keyPath: key] }, set: { [weak self] v in Prefs.current[keyPath: key] = v; self?.prefsChanged() })
+    }
+    private func prefGlass(_ title: String, _ key: WritableKeyPath<ShellPrefs, Bool>) -> SettingsPanel.Row {
+        .segmented(title, ["Net", "Buzlu"], get: { Prefs.current[keyPath: key] ? 0 : 1 }, set: { [weak self] v in Prefs.current[keyPath: key] = v == 0; self?.prefsChanged() })
+    }
+    private func prefToggle(_ title: String, _ key: WritableKeyPath<ShellPrefs, Bool>) -> SettingsPanel.Row {
+        .toggle(title, get: { Prefs.current[keyPath: key] }, set: { [weak self] v in Prefs.current[keyPath: key] = v; self?.prefsChanged() })
+    }
+
+    private func settingsRows() -> [SettingsPanel.Row] {
+        let sizes = ["Küçük", "Orta", "Büyük"]
+        let links: [Session.LinkMode] = [.auto, .usb, .wifi]
+        return [
+            .header("LIQUID GLASS"),
+            prefGlass("Dock", \.dockLens), prefGlass("Kontrol Merkezi", \.controlCenterLens), prefGlass("Klasörler", \.folderLens),
+            prefGlass("Klavye", \.keyboardLens), prefGlass("Widget'lar", \.widgetLens),
+            .header("ANA EKRAN"),
+            prefSeg("Simge Boyutu", sizes, \.iconSize), prefToggle("Simge Adları", \.labels),
+            prefSeg("Dock Boyutu", sizes, \.dockSize), prefToggle("Dock'ta Son Uygulamalar", \.dockRecents),
+            .header("DOKUNMA VE SES"),
+            prefSeg("Kaydırma Hızı", ["Yavaş", "Normal", "Hızlı"], \.scrollSpeed), prefSeg("Uzun Basma", ["Kısa", "Normal", "Uzun"], \.longPress), prefToggle("Klavye Sesleri", \.keySounds),
+            .header("MAC İLE BİRLİKTE KULLANIM"),
+            prefToggle("Bağımsız Kullanım", \.independentInput),
+            .note("Açıkken tablet, Mac'in imlecine ve aktif uygulamasına dokunmaz. Bir uygulama dokunmalara tepki vermezse kapatmayı dene."),
+            .header("EKRAN VE BAĞLANTI"),
+            .segmented("Ekran Alanı", ["Keskin", "Dengeli", "Geniş"], get: { [weak self] in self?.layoutIndex?() ?? 0 }, set: { [weak self] v in
+                self?.closeSettings(); self?.setLayoutIndex?(v)
+            }),
+            .segmented("Bağlantı", ["Otomatik", "USB", "Wi-Fi"], get: { links.firstIndex(of: Session.linkMode) ?? 0 }, set: { [weak self] v in self?.setLinkMode?(links[v]) }),
+            .header("SIFIRLA"),
+            .button("Ana Ekran Düzenini Sıfırla", destructive: true) { [weak self] in self?.closeSettings(); self?.resetLayout() },
+            .button("Ayarları Varsayılana Döndür", destructive: true) { [weak self] in Prefs.reset(); self?.closeSettings(); self?.prefsChanged() },
+        ]
+    }
+
+    /// Several quick taps cost one rebuild, and the expensive backdrop blur stays off the main thread.
+    private var prefsWork: DispatchWorkItem?
+    private func prefsChanged() {
+        prefsWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let t0 = CFAbsoluteTimeGetCurrent()
+            self.layoutAll()
+            self.withBackdrop { [weak self] in self?.setDockBackdrop($0) }
+            guard self.settingsDim != nil else { return }
+            let snap = self.root.snapshot()
+            Log.write("prefs applied in \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms")
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let blurred = self?.softened(snap)
+                DispatchQueue.main.async {
+                    CATransaction.begin(); CATransaction.setDisableActions(true); self?.settingsDim?.contents = blurred; CATransaction.commit()
+                }
+            }
+        }
+        prefsWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: w)
+    }
+
+    private func openSettings() {
+        guard settingsPanel == nil else { return }
+        let dim = CALayer(); dim.frame = CGRect(x: 0, y: 0, width: W, height: H); dim.contentsGravity = .resize; dim.contents = softened(root.snapshot()); dim.opacity = 0
+        overlayPanel.orderFrontRegardless(); overlay.addSublayer(dim); settingsDim = dim
+        dim.spring("opacity", to: 1, damping: 30, stiffness: 240)
+        let w = min(690, W - 80), h = H - menuInset - 34
+        let f = CGRect(x: (W - w) / 2, y: menuInset + 14, width: w, height: h)
+        let g = makeGlass(glassRect(f), radius: 34, lens: false)
+        overlayPanel.contentView?.addSubview(g.view); settingsGlass = g.view
+        let sp = SettingsPanel(frame: f, content: g.content, rows: settingsRows())
+        sp.onDone = { [weak self] in self?.closeSettings() }
+        settingsPanel = sp
+        let l = g.view.layer!
+        l.setValue(0.9, forKeyPath: "transform.scale")
+        l.spring("transform.scale", to: 1.0, damping: 24, stiffness: 300)
+    }
+
+    private func closeSettings() {
+        guard let g = settingsGlass else { return }
+        let dim = settingsDim
+        g.layer?.spring("transform.scale", to: 0.92, damping: 30, stiffness: 340)
+        dim?.spring("opacity", to: 0, damping: 30, stiffness: 300)
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.16; g.animator().alphaValue = 0 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { g.removeFromSuperview(); dim?.removeFromSuperlayer() }
+        settingsPanel = nil; settingsGlass = nil; settingsDim = nil
+    }
+
     // MARK: dock
 
     /// Follows Apple's iPadOS 26 Dock: a compact floating glass capsule that fits only its icons.
     private func layoutDock() {
         dockRoot.sublayers?.forEach { $0.removeFromSuperlayer() }; dockTiles = []
-        let size: CGFloat = 60, gap: CGFloat = 12, pad: CGFloat = 15, maxApps = max(1, Int((W - 120) / (size + gap)))
+        configureGlass(dockGlass, lens: Prefs.current.dockLens)
+        let size = dockIcon, gap: CGFloat = 12, pad: CGFloat = 15, maxApps = max(1, Int((W - 120) / (size + gap)))
         // Recent apps always keep their section, even when the pinned row could fill the Dock.
-        let hasRecents = (layout.recents ?? []).contains { !layout.dock.contains($0) && apps[$0] != nil }
+        let hasRecents = shownRecents.contains { !layout.dock.contains($0) && apps[$0] != nil }
         let pinned = Array(layout.dock.prefix(hasRecents ? max(1, maxApps - 3) : maxApps))
-        let recent = (layout.recents ?? []).filter { !pinned.contains($0) && apps[$0] != nil }.prefix(max(0, min(3, maxApps - pinned.count)))
+        let recent = shownRecents.filter { !pinned.contains($0) && apps[$0] != nil }.prefix(max(0, min(3, maxApps - pinned.count)))
         let count = CGFloat(pinned.count + recent.count)
         let width = count * size + max(0, count - 1) * gap + 2 * pad + (recent.isEmpty ? 0 : 18)
         let height = size + 2 * pad
@@ -895,11 +1021,11 @@ final class Shell {
         kb = KeyboardView(frame: CGRect(origin: .zero, size: f.size))
         kb.onDismiss = { [weak self] in self?.setKeyboard(false) }
         kb.targetPid = { [weak self] in self?.focusPid }
-        kb.onSound = { [weak self] k in self?.playSound?(k) }
+        kb.onSound = { [weak self] k in if Prefs.current.keySounds { self?.playSound?(k) } }
         let host = NSView(frame: CGRect(origin: .zero, size: f.size)); host.wantsLayer = true
         keyWall = CALayer(); keyWall.frame = host.bounds; keyWall.contentsGravity = .resize; host.layer!.addSublayer(keyWall)
         let glass = NSGlassEffectView(frame: host.bounds)
-        glass.wantsLayer = true; glass.cornerRadius = 0; applyLens(glass)
+        glass.wantsLayer = true; glass.cornerRadius = 0; configureGlass(glass, lens: Prefs.current.keyboardLens)
         glass.contentView = kb
         host.addSubview(glass)
         keyPanel.contentView = host
@@ -1015,6 +1141,7 @@ final class Shell {
     }
 
     private func launch(_ path: String, from rect: CGRect) {
+        if path == settingsPath { exitEdit(); closeFolder(); openSettings(); return }
         guard let a = apps[path] else { return }
         launchUntil = Date().addingTimeInterval(5)
         exitEdit(); closeFolder()
@@ -1047,7 +1174,7 @@ final class Shell {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { [weak self] in
             self?.enterApp(); covered = true; finish()
         }
-        let cfg = NSWorkspace.OpenConfiguration(); cfg.activates = !MacActivity.isBusy
+        let cfg = NSWorkspace.OpenConfiguration(); cfg.activates = !Prefs.current.independentInput && !MacActivity.isBusy
         let display = cgFrame, area = usableArea
         NSWorkspace.shared.openApplication(at: a.url, configuration: cfg) { app, err in
             guard let app else {
@@ -1216,7 +1343,7 @@ final class Shell {
         let display = displayID
         func flip(_ f: CGRect) -> CGRect { CGRect(x: f.minX, y: ccSize.height - f.maxY, width: f.width, height: f.height) }
         func tile(_ f: CGRect, _ symbol: String, _ caption: String, _ color: NSColor, toggle: Bool, state: Bool, active: @escaping () -> Bool, action: @escaping () -> Void) {
-            let g = makeGlass(flip(f), radius: min(34, f.height / 2.4), style: .regular); ccSheet.addSubview(g.view)
+            let g = makeGlass(flip(f), radius: min(34, f.height / 2.4), lens: Prefs.current.controlCenterLens); ccSheet.addSubview(g.view)
             let big = f.height >= 120
             let d: CGFloat = big ? 44 : 40
             let badge = CALayer(); badge.frame = CGRect(x: big ? 16 : (f.width - d) / 2, y: big ? 16 : (f.height - d) / 2, width: d, height: d); badge.cornerRadius = d / 2
@@ -1247,7 +1374,7 @@ final class Shell {
         }
         func slider(_ x: CGFloat, _ symbol: String, get: @escaping () -> Double, set: @escaping (Double) -> Void) {
             let f = CGRect(x: x, y: 0, width: 66, height: ccSize.height)
-            let gv = makeGlass(flip(f), radius: 33, style: .regular); ccSheet.addSubview(gv.view)
+            let gv = makeGlass(flip(f), radius: 33, lens: Prefs.current.controlCenterLens); ccSheet.addSubview(gv.view)
             let fill = CALayer(); fill.backgroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
             let clip = CALayer(); clip.frame = CGRect(origin: .zero, size: f.size); clip.cornerRadius = 33; clip.masksToBounds = true; clip.addSublayer(fill); gv.content.addSublayer(clip)
             let glyph = CALayer(); glyph.frame = CGRect(x: 19, y: f.height - 44, width: 28, height: 26); glyph.contentsGravity = .resizeAspect; glyph.contents = tinted(symbol, 20, .darkGray); gv.content.addSublayer(glyph)
@@ -1382,6 +1509,10 @@ final class Shell {
             return
         }
         if p.y < topZone(fullscreenWindow) && !menuShown && (!fullscreenWindow || p.x > W * 0.55) { if p.x > W * 0.55 { touch = .topEdge; prepareControlCenter() } else { touch = .menuEdge }; return }
+        if let sp = settingsPanel {
+            if sp.frame.contains(p) { sp.began(CGPoint(x: p.x - sp.frame.minX, y: p.y - sp.frame.minY)); touch = .settings } else { touch = .settingsOutside }
+            return
+        }
         if folderPos != nil { touch = folderRect.contains(p) ? .folder : .folderOutside; return }
         if gallery != nil { touch = .gallery; return }
         if let r = kbR, r.contains(p) {
@@ -1435,6 +1566,7 @@ final class Shell {
         switch touch {
         case .edge where dragging: trackLiveCard(dx: dx, up: -dy)
         case .topEdge: trackControlCenter(dy)
+        case .settings: if let sp = settingsPanel { sp.moved(CGPoint(x: p.x - sp.frame.minX, y: p.y - sp.frame.minY)) }
         case .drag(let item): dragMoved(item, p)
         case .ccSlider(let i):
             let s = ccSliders[i], local = p.y - ccOrigin.y - s.frame.minY
@@ -1484,6 +1616,8 @@ final class Shell {
             } else if !CGRect(origin: .zero, size: ccSize).contains(local) { closeControlCenter() }
         case .ccSlider: break
         case .folderOutside: closeFolder()
+        case .settings: if let sp = settingsPanel { sp.ended(CGPoint(x: p.x - sp.frame.minX, y: p.y - sp.frame.minY)) }
+        case .settingsOutside: closeSettings()
         case .folder: folderTapped(p)
         case .gallery:
             if let c = galleryCards.first(where: { $0.frame.contains(p) }) { addWidget(c.title) } else { closeGallery() }

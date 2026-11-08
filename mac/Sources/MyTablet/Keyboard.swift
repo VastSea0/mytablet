@@ -112,7 +112,7 @@ final class KeyboardView: NSView {
         for down in [true, false] {
             let e = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: down)
             e?.flags = capsOn ? flags.union(.maskAlphaShift) : flags
-            if let pid = targetPid?() { e?.postToPid(pid) } else { e?.post(tap: .cghidEventTap) }
+            if let e { if let pid = targetPid?() { BackgroundInput.key(e, pid: pid) } else { e.post(tap: .cghidEventTap) } }
         }
     }
 

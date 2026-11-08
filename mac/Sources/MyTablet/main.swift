@@ -70,6 +70,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         s.gestures.onSystemGesture = { [weak sh] g in DispatchQueue.main.async { sh?.system(g) } }
         s.gestures.onTap = { [weak sh] t, p in sh?.tappedInApp(t, at: p) }
         sh.passTap = { [weak s] p in s?.gestures.forwardTap(p) }
+        sh.layoutIndex = { [weak self] in self?.layoutIndex ?? 0 }
+        sh.setLayoutIndex = { [weak self] i in self?.applyLayout(i) }
+        sh.setLinkMode = { [weak self] m in self?.applyLink(m) }
         sh.playSound = { [weak s] k in s?.playSound(k) }
         s.start(display: d)
         if let path = ProcessInfo.processInfo.environment["MYTABLET_REPLAY"] { Replay.run(path, into: s.gestures) }
@@ -77,15 +80,23 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     @objc private func pickLink(_ s: NSMenuItem) {
         guard let raw = s.representedObject as? String, let m = Session.LinkMode(rawValue: raw) else { return }
+        applyLink(m)
+    }
+
+    private func applyLink(_ m: Session.LinkMode) {
         Session.linkMode = m
-        for it in linkItems { it.state = it === s ? .on : .off }
+        for it in linkItems { it.state = (it.representedObject as? String) == m.rawValue ? .on : .off }
         session?.reconnect()
     }
 
     @objc private func resetHome() { shell?.resetLayout() }
 
     @objc private func pick(_ s: NSMenuItem) {
-        layoutIndex = s.tag
+        applyLayout(s.tag)
+    }
+
+    private func applyLayout(_ index: Int) {
+        layoutIndex = index
         for (i, it) in layoutItems.enumerated() { it.state = i == layoutIndex ? .on : .off }
         display?.apply(DisplayLayout.all[layoutIndex])
         session?.gestures.setFrame(display?.bounds ?? .zero)

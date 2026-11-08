@@ -26,3 +26,5 @@
 typedef NS_ENUM(int, MTGestureKind) { MTGestureMagnify = 8, MTGestureRotate = 5 };
 // phase: 1 began, 2 changed, 4 ended, 8 cancelled
 void MTPostGesture(CGPoint location, MTGestureKind kind, double value, int phase);
+// The same events, handed to `sink` instead of the session.
+void MTEachGestureEvent(CGPoint location, MTGestureKind kind, double value, int phase, void (^sink)(CGEventRef));
