@@ -77,11 +77,31 @@ final class Session {
             q.sync { attach(l) }
             l.startReading()
             onState?("Bağlı")
+            let watchdog = keepReceiverInFront()
             done.wait()
+            watchdog.cancel()
             q.sync { detach() }
             onState?("Bağlantı kesildi")
             Thread.sleep(forTimeInterval: 0.5)
         }
+    }
+
+    func playSound(_ kind: Int) { q.async { self.link?.sendSound(kind) } }
+
+    /// The tablet always comes back to the desktop: anything that takes the receiver off screen is undone.
+    private func keepReceiverInFront() -> DispatchSourceTimer {
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        t.schedule(deadline: .now() + 3, repeating: 2)
+        t.setEventHandler {
+            let top = Adb.run(["shell", "dumpsys activity activities | grep -m1 topResumedActivity"]).1
+            let awake = Adb.run(["shell", "dumpsys power | grep -m1 mWakefulness="]).1.contains("Awake")
+            if !awake || !top.contains("dev.mytablet") {
+                Log.write("receiver off screen, restoring (\(awake ? top : "asleep"))")
+                Adb.run(["shell", "input keyevent KEYCODE_WAKEUP; am start -n dev.mytablet/.MainActivity"])
+            }
+        }
+        t.resume()
+        return t
     }
 
     private func attach(_ l: Link) {

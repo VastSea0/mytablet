@@ -35,6 +35,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private final LinkedBlockingQueue<byte[]> outbox = new LinkedBlockingQueue<>();
     private Thread server;
     private volatile boolean running;
+    private KeyClicks clicks;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -46,6 +47,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         view.getHolder().setFixedSize(W, H);
         view.getHolder().addCallback(this);
         setContentView(view);
+        clicks = new KeyClicks(this);
         view.requestUnbufferedDispatch(InputDevice.SOURCE_TOUCHSCREEN);
         hideBars();
         // An edge swipe can reveal the transient system bars; take them away again quickly.
@@ -151,6 +153,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
                 int len = in.readInt();
                 if (len > data.length) data = new byte[len * 2];
                 in.readFully(data, 0, len);
+                if (type == 3) { clicks.play(seq); continue; }
                 if (type == 2) {
                     outbox.offer(ByteBuffer.allocate(9).put((byte) 3).putLong(ts).array());
                     continue;

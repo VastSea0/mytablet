@@ -35,6 +35,8 @@ final class Link {
         packet(type: 1, seq: seq, ts: f.captureNs, flags: f.isKey ? 2 : 0, body: f.data)
     }
 
+    func sendSound(_ kind: Int) { packet(type: 3, seq: UInt32(kind), ts: 0, flags: 0, body: Data()) }
+
     func sendPing(_ ns: UInt64) { packet(type: 2, seq: 0, ts: ns, flags: 0, body: Data()) }
 
     private func packet(type: UInt8, seq: UInt32, ts: UInt64, flags: UInt8, body: Data) {

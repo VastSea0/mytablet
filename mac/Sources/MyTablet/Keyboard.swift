@@ -43,6 +43,10 @@ final class KeyboardView: NSView {
     var onDismiss: (() -> Void)?
     /// Typing goes to the tablet's focused app, not to whatever is active on the Mac.
     var targetPid: (() -> pid_t?)?
+    /// Plays on the tablet's own speaker: 0 letter, 1 delete, 2 modifier.
+    var onSound: ((Int) -> Void)?
+    /// When set, keys edit shell text (a folder name) instead of going to an app.
+    var textSink: ((String?) -> Void)?
     override var isFlipped: Bool { true }
 
     override init(frame: NSRect) {
@@ -98,6 +102,14 @@ final class KeyboardView: NSView {
     }
 
     private func post(_ code: CGKeyCode) {
+        if let sink = textSink {
+            if code == 51 { sink(nil) } else if code == 49 { sink(" ") } else if code != 36 {
+                let shifted = flags.contains(.maskShift) != capsOn
+                let s = KeyLabels.label(code, shift: shifted)
+                sink(shifted ? s.uppercased(with: Locale(identifier: "tr")) : s)
+            }
+            return
+        }
         for down in [true, false] {
             let e = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: down)
             e?.flags = capsOn ? flags.union(.maskAlphaShift) : flags
@@ -113,6 +125,7 @@ final class KeyboardView: NSView {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         c.layer.backgroundColor = capColor(c.key, true)
         CATransaction.commit()
+        onSound?(c.key.code == 51 ? 1 : (c.key.fixed != nil && c.key.code != 49 ? 2 : 0))
         if c.key.code == 51 {
             post(51)
             repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
