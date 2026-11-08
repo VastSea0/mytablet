@@ -18,10 +18,19 @@ private final class ShellPanel: NSPanel {
 }
 
 /// Apple's real Liquid Glass, with a top-left-origin layer inside for content.
-private func makeGlass(_ frame: CGRect, radius: CGFloat, style: NSGlassEffectView.Style = .regular) -> (view: NSGlassEffectView, content: CALayer) {
+/// AppKit's public styles only offer the frosted look. The clear, edge-refracting material the system Dock
+/// uses is one of the view's internal variants, so it's set when available and falls back to `.clear`.
+let lensGlassVariant = 11
+func applyLens(_ g: NSGlassEffectView) {
+    if g.responds(to: Selector(("set_variant:"))) { g.setValue(lensGlassVariant, forKey: "_variant") } else { g.style = .clear }
+}
+
+private func makeGlass(_ frame: CGRect, radius: CGFloat, style: NSGlassEffectView.Style = .regular, lens: Bool = true) -> (view: NSGlassEffectView, content: CALayer) {
     let g = NSGlassEffectView(frame: frame)
+    if lens { applyLens(g) }
     g.wantsLayer = true
-    g.cornerRadius = radius; g.style = style
+    g.cornerRadius = radius
+    if !lens { g.style = style }
     let host = NSView(frame: CGRect(origin: .zero, size: frame.size)); host.wantsLayer = true
     host.autoresizingMask = [.width, .height]
     g.contentView = host
@@ -403,6 +412,9 @@ final class Shell {
             let k = min(f.width / size.width, f.height / size.height)
             let fit = CGRect(x: f.midX - size.width * k / 2, y: f.midY - size.height * k / 2, width: size.width * k, height: size.height * k)
             let g = makeGlass(glassRect(fit), radius: 24 * k)
+            // Clear glass needs a dark layer for macOS's white widget text to stay readable; the rim stays glass.
+            let shade = CALayer(); shade.frame = g.content.bounds; shade.cornerRadius = 24 * k; shade.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
+            g.content.addSublayer(shade)
             glassHost.addSubview(g.view); folderGlass[item.key] = g.view
             let c = CALayer(); c.frame = g.content.bounds; c.contents = widgetImages[title]; c.contentsGravity = .resizeAspect
             g.content.addSublayer(c); widgetLayers[item.key] = c
@@ -542,7 +554,7 @@ final class Shell {
         layout.sync(widgets: specs)
         if layout.pages.flatMap({ $0 }).map(\.key) != before { rebuildHome(); save(); return }
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        for item in layout.pages[page] {
+        for item in layout.pages.flatMap({ $0 }) { // every page: a widget on another page must not be blank when you reach it
             if case .widget(let t, _, _) = item { widgetLayers[item.key]?.contents = images[t] }
         }
         CATransaction.commit()
@@ -812,7 +824,7 @@ final class Shell {
     /// Follows Apple's iPadOS 26 Dock: a compact floating glass capsule that fits only its icons.
     private func layoutDock() {
         dockRoot.sublayers?.forEach { $0.removeFromSuperlayer() }; dockTiles = []
-        let size: CGFloat = 60, gap: CGFloat = 12, pad: CGFloat = 12, maxApps = max(1, Int((W - 120) / (size + gap)))
+        let size: CGFloat = 60, gap: CGFloat = 12, pad: CGFloat = 15, maxApps = max(1, Int((W - 120) / (size + gap)))
         // Recent apps always keep their section, even when the pinned row could fill the Dock.
         let hasRecents = (layout.recents ?? []).contains { !layout.dock.contains($0) && apps[$0] != nil }
         let pinned = Array(layout.dock.prefix(hasRecents ? max(1, maxApps - 3) : maxApps))
@@ -887,7 +899,7 @@ final class Shell {
         let host = NSView(frame: CGRect(origin: .zero, size: f.size)); host.wantsLayer = true
         keyWall = CALayer(); keyWall.frame = host.bounds; keyWall.contentsGravity = .resize; host.layer!.addSublayer(keyWall)
         let glass = NSGlassEffectView(frame: host.bounds)
-        glass.wantsLayer = true; glass.cornerRadius = 0; glass.style = .regular
+        glass.wantsLayer = true; glass.cornerRadius = 0; applyLens(glass)
         glass.contentView = kb
         host.addSubview(glass)
         keyPanel.contentView = host
@@ -904,7 +916,7 @@ final class Shell {
                 guard let self, let img else { return }
                 let k = CGFloat(img.width) / self.W
                 CATransaction.begin(); CATransaction.setDisableActions(true)
-                self.keyWall.contents = img.cropping(to: CGRect(x: 0, y: (self.H - h) * k, width: self.W * k, height: h * k))
+                self.keyWall.contents = self.softened(img)?.cropping(to: CGRect(x: 0, y: (self.H - h) * k, width: self.W * k, height: h * k))
                 CATransaction.commit()
             }
             keyPanel.orderFrontRegardless()

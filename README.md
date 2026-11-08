@@ -19,8 +19,9 @@ The resolution is currently fixed to that tablet's 1920×1200 panel.
 - **Touch:** tap, double tap, scroll with momentum, press-and-drag, long press for secondary click, two-finger
   scroll, pinch and rotate.
 - **Independent input:** tablet taps and scrolls return the Mac's pointer immediately.
-- **Liquid Glass:** Dock, Control Center, folders, keyboard and widgets use Apple's own `NSGlassEffectView`, placed over
-  a backdrop in their own window, because the effect only refracts content in the same window.
+- **Liquid Glass:** Dock, Control Center, folders, keyboard and widgets use Apple's own `NSGlassEffectView` with its clear,
+  edge-refracting internal variant (the same look as the system Dock), placed over a backdrop in their own window, because
+  the effect only refracts content in the same window.
 - **Home screen:** your real apps and Dock, spring animations, edit mode, drag to reorder, folders, and a
   layout that persists.
 - **Windowing:** apps open as free windows over the wallpaper, like iPadOS. The Mac's menu bar is replaced by a
@@ -82,7 +83,7 @@ and window dragging uses Accessibility, so neither touches the pointer.
   `adb shell settings put secure user_setup_complete 1`.
 - Widgets are mirrored images: you can't interact inside one, and a tap opens its app for known widgets only.
 - No Split View or portrait orientation yet.
-- Private APIs are used (`CGVirtualDisplay`, gesture event fields, `_AXUIElementGetWindow`, IOBluetooth power
+- Private APIs are used (`CGVirtualDisplay`, the glass view's `_variant`, gesture event fields, `_AXUIElementGetWindow`, IOBluetooth power
   control), so a macOS update can break them.
 - Baseline H.264 is used because the T618 decoder holds frames with other profiles.
 
