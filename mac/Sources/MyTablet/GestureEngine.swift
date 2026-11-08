@@ -210,6 +210,7 @@ final class GestureEngine {
     }
 
     private func tap(at p: CGPoint) {
+        if HitTest.onlyOwner != nil && inject_target == nil { return } // test mode never reaches real apps
         let t = now
         tapCount = (t - lastTapTime < 0.35 && hypot(p.x - lastTapPoint.x, p.y - lastTapPoint.y) < 24) ? tapCount + 1 : 1
         lastTapTime = t; lastTapPoint = p

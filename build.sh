@@ -25,5 +25,5 @@ cp $OUT/MyTabletReceiver.apk $APP/Contents/Resources/
 # A stable identity keeps Screen Recording / Accessibility grants across rebuilds.
 # Override with MYTABLET_SIGN_IDENTITY; without a certificate the app is ad-hoc signed and must be re-granted after each build.
 IDENTITY=${MYTABLET_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development[^"]*\)".*/\1/p' | head -1)}
-codesign --force --options runtime --sign "${IDENTITY:--}" $APP
+codesign --force --options runtime --entitlements mac/MyTablet.entitlements --sign "${IDENTITY:--}" $APP
 echo "Built $APP"

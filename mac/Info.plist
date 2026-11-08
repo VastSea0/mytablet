@@ -7,6 +7,9 @@
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleShortVersionString</key><string>1.0</string>
+<key>NSCalendarsFullAccessUsageDescription</key><string>Yaklaşan Etkinlikler widget'ı için gerekli.</string>
+<key>NSAppleEventsUsageDescription</key><string>Kontrol Merkezi'nden koyu modu değiştirmek için gerekli.</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>Kontrol Merkezi'nden Bluetooth'u açıp kapatmak için gerekli.</string>
 <key>LSUIElement</key><true/>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSScreenCaptureUsageDescription</key><string>Sanal tablet ekranını tablete aktarmak için gerekli.</string>

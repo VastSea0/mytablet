@@ -23,6 +23,9 @@ final class AppController: NSObject, NSApplicationDelegate {
             m.addItem(it); layoutItems.append(it)
         }
         m.addItem(.separator())
+        let reset = NSMenuItem(title: "Ana Ekranı Sıfırla", action: #selector(resetHome), keyEquivalent: "")
+        reset.target = self
+        m.addItem(reset)
         let quit = NSMenuItem(title: "Çık", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         m.addItem(quit)
         item.menu = m
@@ -51,6 +54,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         session = s
         let sh = Shell(displayID: d.id)
         shell = sh
+        if ProcessInfo.processInfo.environment["MYTABLET_SHELL_TEST"] != nil { HitTest.onlyOwner = "TouchLab" } // shell-only test mode: app input is dropped
         let testing = ProcessInfo.processInfo.environment["MYTABLET_REPLAY"] != nil // replays target windows directly, no shell on top
         if !testing { sh.start() }
         if !testing { s.gestures.shellCaptures = { [weak sh] p, h in sh?.captures(p, height: h) ?? false } }
@@ -58,9 +62,12 @@ final class AppController: NSObject, NSApplicationDelegate {
         s.gestures.onSystemGesture = { [weak sh] g in DispatchQueue.main.async { sh?.system(g) } }
         s.gestures.onTap = { [weak sh] t in sh?.tappedInApp(t) }
         sh.passTap = { [weak s] p in s?.gestures.forwardTap(p) }
+        sh.playSound = { [weak s] k in s?.playSound(k) }
         s.start(display: d)
         if let path = ProcessInfo.processInfo.environment["MYTABLET_REPLAY"] { Replay.run(path, into: s.gestures) }
     }
+
+    @objc private func resetHome() { shell?.resetLayout() }
 
     @objc private func pick(_ s: NSMenuItem) {
         layoutIndex = s.tag
