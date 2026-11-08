@@ -51,11 +51,12 @@ final class AppController: NSObject, NSApplicationDelegate {
         session = s
         let sh = Shell(displayID: d.id)
         shell = sh
-        sh.start()
-        s.gestures.shellCaptures = { [weak sh] p, h in sh?.captures(p, height: h) ?? false }
+        let testing = ProcessInfo.processInfo.environment["MYTABLET_REPLAY"] != nil // replays target windows directly, no shell on top
+        if !testing { sh.start() }
+        if !testing { s.gestures.shellCaptures = { [weak sh] p, h in sh?.captures(p, height: h) ?? false } }
         s.gestures.shellHandle = { [weak sh] e in DispatchQueue.main.async { sh?.handle(e) } }
         s.gestures.onSystemGesture = { [weak sh] g in DispatchQueue.main.async { sh?.system(g) } }
-        s.gestures.onTap = { [weak sh] in sh?.tappedInApp() }
+        s.gestures.onTap = { [weak sh] t in sh?.tappedInApp(t) }
         sh.passTap = { [weak s] p in s?.gestures.forwardTap(p) }
         s.start(display: d)
         if let path = ProcessInfo.processInfo.environment["MYTABLET_REPLAY"] { Replay.run(path, into: s.gestures) }

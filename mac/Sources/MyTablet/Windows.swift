@@ -42,10 +42,21 @@ enum Windows {
     }
 
     static func raise(_ w: TabletWindow) {
-        NSRunningApplication(processIdentifier: w.pid)?.activate()
         guard let el = element(for: w) else { return }
         AXUIElementSetAttributeValue(el, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(el, kAXRaiseAction as CFString)
+    }
+
+    private static func element(_ t: InputTarget) -> AXUIElement? {
+        axWindows(t.pid).first { var i: CGWindowID = 0; return _AXUIElementGetWindow($0, &i) == .success && i == t.window }
+    }
+
+    static func origin(_ t: InputTarget) -> CGPoint? { element(t).flatMap(frame(of:))?.origin }
+
+    static func move(_ t: InputTarget, to p: CGPoint) {
+        var o = p
+        guard let el = element(t), let v = AXValueCreate(.cgPoint, &o) else { return }
+        AXUIElementSetAttributeValue(el, kAXPositionAttribute as CFString, v)
     }
 
     static func close(_ w: TabletWindow) {
@@ -102,16 +113,13 @@ enum Windows {
         return try? await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: sw), configuration: cfg)
     }
 
-    /// True when keyboard focus is in an editable text element on the tablet.
-    static func textFocused(on display: CGRect) -> Bool {
-        let sys = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(sys, 0.1)
+    /// True when the given app's focused element takes text. Asked per app because the Mac's focus is elsewhere.
+    static func textFocused(pid: pid_t) -> Bool {
+        let app = AXUIElementCreateApplication(pid); AXUIElementSetMessagingTimeout(app, 0.15)
         var v: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(sys, kAXFocusedUIElementAttribute as CFString, &v) == .success, let raw = v else { return false }
-        let el = raw as! AXUIElement
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &v) == .success, let raw = v else { return false }
         var r: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &r) == .success, let role = r as? String,
-              ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"].contains(role) else { return false }
-        guard let f = frame(of: el) else { return true }
-        return display.contains(CGPoint(x: f.midX, y: f.midY))
+        guard AXUIElementCopyAttributeValue(raw as! AXUIElement, kAXRoleAttribute as CFString, &r) == .success, let role = r as? String else { return false }
+        return ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"].contains(role)
     }
 }

@@ -1,11 +1,12 @@
 import CoreGraphics
+import AppKit
 import Foundation
 
 /// Turns raw multitouch into the same semantics macOS uses for direct touch:
 /// tap = click, immediate pan = trackpad scroll with momentum, hold+move = drag,
 /// long press = secondary click, two fingers = scroll / pinch / rotate.
 final class GestureEngine {
-    private enum Mode { case idle, pending, scrolling, dragging, consumed, twoPending, twoScroll, pinch, rotate, system }
+    private enum Mode { case idle, pending, windowDrag, scrolling, dragging, consumed, twoPending, twoScroll, pinch, rotate, system }
     private let q = DispatchQueue(label: "gesture", qos: .userInteractive)
     private let inject = Injector()
     private var mode = Mode.idle
@@ -22,14 +23,15 @@ final class GestureEngine {
     private var twoStartDist = 0.0, twoStartAngle = 0.0, twoLastDist = 0.0, twoLastAngle = 0.0
     private var twoStartCentroid = CGPoint.zero, twoLastCentroid = CGPoint.zero, twoStartTime = 0.0, twoMaxCount = 0
 
-    private var savedCursor: CGPoint?
-    private var restore: DispatchWorkItem?
+    private var windowOrigin = CGPoint.zero, windowEl: InputTarget?
+    /// The tablet's own focus, independent of the Mac's active app.
+    private(set) var focused: InputTarget?
 
     var onSystemGesture: ((SystemGesture) -> Void)?
     /// Tablet shell hooks: `shellCaptures` claims a touch sequence at its first finger.
     var shellCaptures: ((CGPoint, CGFloat) -> Bool)?
     var shellHandle: ((TouchEvent) -> Void)?
-    var onTap: (() -> Void)?
+    var onTap: ((InputTarget?) -> Void)?
     private var shellOwns = false
 
     enum SystemGesture { case up, down, left, right }
@@ -38,7 +40,7 @@ final class GestureEngine {
     private let holdDrag = 0.22      // seconds before a move means drag instead of scroll
     private let longPress = 0.55
 
-    func setFrame(_ r: CGRect) { q.async { self.frame = r } }
+    func setFrame(_ r: CGRect) { q.async { self.frame = r; self.inject.tabletFrame = r } }
     /// Display arrangement can change at any time, so bounds are re-read at the start of each touch.
     var boundsProvider: (() -> CGRect)?
 
@@ -48,7 +50,7 @@ final class GestureEngine {
     private var now: Double { CFAbsoluteTimeGetCurrent() }
 
     private func process(_ e: TouchEvent) {
-        if e.action == 0 && e.points.count == 1, let b = boundsProvider?() { frame = b }
+        if e.action == 0 && e.points.count == 1, let b = boundsProvider?() { frame = b; inject.tabletFrame = b }
         if e.action == 0 && e.points.count == 1, let c = shellCaptures {
             shellOwns = c(CGPoint(x: e.points[0].x * frame.width, y: e.points[0].y * frame.height), frame.height)
         }
@@ -71,13 +73,28 @@ final class GestureEngine {
 
     // MARK: one finger
 
+    /// Where scroll events are addressed; pid-targeted events carry their own location.
+    private var scrollPoint = CGPoint.zero
+    /// Remembers what the Mac is doing so a tablet tap can't take its focus away.
+    private func keepMacFocus(_ action: () -> Void) {
+        let macApp = NSWorkspace.shared.frontmostApplication
+        let target = inject_target
+        action()
+        focused = target ?? focused
+        q.asyncAfter(deadline: .now() + 0.08) {
+            guard let macApp, let target, macApp.processIdentifier != target.pid,
+                  !HitTest.hasOpenMenu(pid: target.pid) else { return }
+            macApp.activate()
+        }
+    }
+    private var inject_target: InputTarget?
+
     private func fingerDown(_ p: CGPoint) {
         stopMomentum(sendEnd: true)
-        let c = CGEvent(source: nil)?.location ?? .zero
-        if !frame.contains(c) { savedCursor = c }
-        restore?.cancel()
         mode = .pending; start = p; last = p; startTime = now; lastMoveTime = now; hasHeld = false; velocity = .zero; twoMaxCount = 1
-        inject.move(p)
+        scrollPoint = p
+        inject_target = HitTest.target(at: p)
+        if inject_target == nil && HitTest.onlyOwner != nil { mode = .consumed; return } // replay never touches anything else
         let t = DispatchSource.makeTimerSource(queue: q)
         t.schedule(deadline: .now() + longPress)
         t.setEventHandler { [weak self] in self?.longPressFired() }
@@ -86,8 +103,8 @@ final class GestureEngine {
 
     private func longPressFired() {
         guard mode == .pending else { return }
-        inject.mouse(.rightMouseDown, start, button: .right)
-        inject.mouse(.rightMouseUp, start, button: .right)
+        focused = inject_target ?? focused
+        inject.click(start, button: .right)
         mode = .consumed
     }
 
@@ -100,19 +117,30 @@ final class GestureEngine {
             case .pending:
                 if hypot(p.x - start.x, p.y - start.y) < slop { return }
                 cancelHold()
-                if now - startTime >= holdDrag || HitTest.wantsDrag(at: start) {
+                let held = now - startTime >= holdDrag
+                let kind = HitTest.dragKind(at: start)
+                if kind == .moveWindow, let t = inject_target, let origin = Windows.origin(t) {
+                    // Moving a window through Accessibility leaves the pointer free.
+                    mode = .windowDrag; windowOrigin = origin; windowEl = t; last = p
+                    return
+                }
+                if held || kind == .control {
+                    focused = inject_target ?? focused
+                    inject.hold(at: start)
                     mode = .dragging
                     inject.mouse(.leftMouseDown, start)
                     inject.mouse(.leftMouseDragged, p)
                 } else {
                     mode = .scrolling
-                    inject.scroll(dx: 0, dy: 0, phase: .began)
+                    inject.scroll(at: scrollPoint, dx: 0, dy: 0, phase: .began)
                     trackScroll(p)
                 }
                 last = p
             case .scrolling: trackScroll(p)
             case .dragging:
                 inject.mouse(.leftMouseDragged, p); last = p
+            case .windowDrag:
+                if let t = windowEl { Windows.move(t, to: CGPoint(x: windowOrigin.x + p.x - start.x, y: windowOrigin.y + p.y - start.y)) }
             default: break
             }
         } else if e.points.count == 2 {
@@ -125,7 +153,7 @@ final class GestureEngine {
     private func trackScroll(_ p: CGPoint) {
         let t = now, dt = max(t - lastMoveTime, 0.001)
         let dx = p.x - last.x, dy = p.y - last.y
-        inject.scroll(dx: dx, dy: dy, phase: .changed)
+        inject.scroll(at: scrollPoint, dx: dx, dy: dy, phase: .changed)
         velocity = CGVector(dx: velocity.dx * 0.6 + dx / dt * 0.4, dy: velocity.dy * 0.6 + dy / dt * 0.4)
         last = p; lastMoveTime = t
     }
@@ -135,17 +163,19 @@ final class GestureEngine {
         switch mode {
         case .pending where e.points.count == 1:
             tap(at: start)
-            mode = .idle; scheduleRestore(0.15)
+            mode = .idle
         case .scrolling:
             finishScroll()
         case .dragging:
-            inject.mouse(.leftMouseUp, last); mode = .idle; scheduleRestore(0.15)
+            inject.mouse(.leftMouseUp, last); inject.release(); mode = .idle
+        case .windowDrag:
+            mode = .idle
         case .twoPending, .twoScroll, .pinch, .rotate:
             twoLifted(e)
         case .system:
             systemLifted(e)
         default:
-            if e.points.count == 1 { mode = .idle; scheduleRestore(0.15) }
+            if e.points.count == 1 { mode = .idle }
         }
     }
 
@@ -153,9 +183,8 @@ final class GestureEngine {
     func forwardTap(_ local: CGPoint) {
         q.async { [self] in
             let g = CGPoint(x: frame.minX + local.x, y: frame.minY + local.y)
-            let c = CGEvent(source: nil)?.location ?? .zero
-            if !frame.contains(c) { savedCursor = c }
-            inject.move(g); tap(at: g); scheduleRestore(0.15)
+            inject_target = HitTest.target(at: g)
+            tap(at: g)
         }
     }
 
@@ -163,16 +192,15 @@ final class GestureEngine {
         let t = now
         tapCount = (t - lastTapTime < 0.35 && hypot(p.x - lastTapPoint.x, p.y - lastTapPoint.y) < 24) ? tapCount + 1 : 1
         lastTapTime = t; lastTapPoint = p
-        inject.mouse(.leftMouseDown, p, clicks: tapCount)
-        inject.mouse(.leftMouseUp, p, clicks: tapCount)
-        onTap?()
+        keepMacFocus { inject.click(p, clicks: tapCount) }
+        onTap?(inject_target)
     }
 
     private func finishScroll() {
-        inject.scroll(dx: 0, dy: 0, phase: .ended)
+        inject.scroll(at: scrollPoint, dx: 0, dy: 0, phase: .ended)
         mode = .idle
         let stale = now - lastMoveTime > 0.08
-        if stale || hypot(velocity.dx, velocity.dy) < 60 { scheduleRestore(0.15); return }
+        if stale || hypot(velocity.dx, velocity.dy) < 60 { return }
         startMomentum()
     }
 
@@ -186,8 +214,8 @@ final class GestureEngine {
             // UIScrollView's normal deceleration: 0.998 per millisecond.
             let k = pow(0.998, tick * 1000)
             v = CGVector(dx: v.dx * k, dy: v.dy * k)
-            if hypot(v.dx, v.dy) < 12 { self.stopMomentum(sendEnd: true); self.scheduleRestore(0.05); return }
-            self.inject.scroll(dx: v.dx * tick, dy: v.dy * tick, phase: .none, momentum: first ? .begin : .cont)
+            if hypot(v.dx, v.dy) < 12 { self.stopMomentum(sendEnd: true); return }
+            self.inject.scroll(at: self.scrollPoint, dx: v.dx * tick, dy: v.dy * tick, phase: .none, momentum: first ? .begin : .cont)
             first = false
         }
         t.resume(); momentum = t
@@ -196,30 +224,19 @@ final class GestureEngine {
     private func stopMomentum(sendEnd: Bool) {
         guard let m = momentum else { return }
         m.cancel(); momentum = nil
-        if sendEnd { inject.scroll(dx: 0, dy: 0, phase: .none, momentum: .end) }
-    }
-
-    private func scheduleRestore(_ delay: Double) {
-        guard let saved = savedCursor else { return }
-        let w = DispatchWorkItem { [weak self] in
-            guard let self, self.mode == .idle, self.momentum == nil else { return }
-            CGWarpMouseCursorPosition(saved); CGAssociateMouseAndMouseCursorPosition(1)
-            self.savedCursor = nil
-        }
-        restore = w
-        q.asyncAfter(deadline: .now() + delay, execute: w)
+        if sendEnd { inject.scroll(at: scrollPoint, dx: 0, dy: 0, phase: .none, momentum: .end) }
     }
 
     private func cancel() {
         cancelHold()
         switch mode {
-        case .dragging: inject.mouse(.leftMouseUp, last)
-        case .scrolling, .twoScroll: inject.scroll(dx: 0, dy: 0, phase: .ended)
-        case .pinch: inject.magnify(at: twoLastCentroid, delta: 0, phase: 8)
-        case .rotate: inject.rotate(at: twoLastCentroid, degrees: 0, phase: 8)
+        case .dragging: inject.mouse(.leftMouseUp, last); inject.release()
+        case .scrolling, .twoScroll: inject.scroll(at: scrollPoint, dx: 0, dy: 0, phase: .ended)
+        case .pinch: inject.magnify(at: twoLastCentroid, delta: 0, phase: 8); inject.release()
+        case .rotate: inject.rotate(at: twoLastCentroid, degrees: 0, phase: 8); inject.release()
         default: break
         }
-        mode = .idle; scheduleRestore(0.15)
+        mode = .idle
     }
 
     // MARK: two fingers
@@ -237,7 +254,7 @@ final class GestureEngine {
         mode = .twoPending; twoMaxCount = 2
         twoStartCentroid = c; twoLastCentroid = c; twoStartDist = d; twoLastDist = d; twoStartAngle = a; twoLastAngle = a; twoStartTime = now
         lastMoveTime = now; velocity = .zero
-        inject.move(c)
+        scrollPoint = c
     }
 
     private func angleDelta(_ a: Double, _ b: Double) -> Double {
@@ -254,18 +271,20 @@ final class GestureEngine {
             let pan = hypot(c.x - twoStartCentroid.x, c.y - twoStartCentroid.y)
             if pinch > 12 && pinch > pan {
                 mode = .pinch; twoLastDist = d
+                inject.hold(at: c)
                 inject.magnify(at: c, delta: 0, phase: 1)
             } else if turn > 14 && pan < 20 {
                 mode = .rotate; twoLastAngle = a
+                inject.hold(at: c)
                 inject.rotate(at: c, degrees: 0, phase: 1)
             } else if pan > slop {
                 mode = .twoScroll; twoLastCentroid = c; lastMoveTime = now
-                inject.scroll(dx: 0, dy: 0, phase: .began)
+                inject.scroll(at: scrollPoint, dx: 0, dy: 0, phase: .began)
             }
         case .twoScroll:
             let t = now, dt = max(t - lastMoveTime, 0.001)
             let dx = c.x - twoLastCentroid.x, dy = c.y - twoLastCentroid.y
-            inject.scroll(dx: dx, dy: dy, phase: .changed)
+            inject.scroll(at: scrollPoint, dx: dx, dy: dy, phase: .changed)
             velocity = CGVector(dx: velocity.dx * 0.6 + dx / dt * 0.4, dy: velocity.dy * 0.6 + dy / dt * 0.4)
             twoLastCentroid = c; lastMoveTime = t
         case .pinch:
@@ -283,21 +302,20 @@ final class GestureEngine {
         switch mode {
         case .twoPending:
             if now - twoStartTime < 0.3 {
-                inject.mouse(.rightMouseDown, twoStartCentroid, button: .right)
-                inject.mouse(.rightMouseUp, twoStartCentroid, button: .right)
+                inject.click(twoStartCentroid, button: .right)
             }
             mode = .consumed
         case .twoScroll:
-            inject.scroll(dx: 0, dy: 0, phase: .ended)
+            inject.scroll(at: scrollPoint, dx: 0, dy: 0, phase: .ended)
             if now - lastMoveTime <= 0.08 && hypot(velocity.dx, velocity.dy) >= 60 { startMomentum() }
             mode = .consumed
         case .pinch:
-            inject.magnify(at: twoStartCentroid, delta: 0, phase: 4); mode = .consumed
+            inject.magnify(at: twoStartCentroid, delta: 0, phase: 4); inject.release(); mode = .consumed
         case .rotate:
-            inject.rotate(at: twoStartCentroid, degrees: 0, phase: 4); mode = .consumed
+            inject.rotate(at: twoStartCentroid, degrees: 0, phase: 4); inject.release(); mode = .consumed
         default: break
         }
-        if e.points.count == 1 { mode = .idle; scheduleRestore(0.15) }
+        if e.points.count == 1 { mode = .idle }
     }
 
     // MARK: three+ fingers
@@ -312,9 +330,9 @@ final class GestureEngine {
     private func threeFingers(_ e: TouchEvent) {
         cancelHold()
         switch mode {
-        case .twoScroll: inject.scroll(dx: 0, dy: 0, phase: .ended)
-        case .pinch: inject.magnify(at: twoStartCentroid, delta: 0, phase: 8)
-        case .rotate: inject.rotate(at: twoStartCentroid, degrees: 0, phase: 8)
+        case .twoScroll: inject.scroll(at: scrollPoint, dx: 0, dy: 0, phase: .ended)
+        case .pinch: inject.magnify(at: twoStartCentroid, delta: 0, phase: 8); inject.release()
+        case .rotate: inject.rotate(at: twoStartCentroid, degrees: 0, phase: 8); inject.release()
         default: break
         }
         mode = .system; sysStart = centroid(e); sysLast = sysStart
@@ -328,6 +346,6 @@ final class GestureEngine {
             onSystemGesture?(abs(dy) > abs(dx) ? (dy < 0 ? .up : .down) : (dx < 0 ? .left : .right))
         }
         mode = .consumed
-        if e.points.count == 1 { mode = .idle; scheduleRestore(0.15) }
+        if e.points.count == 1 { mode = .idle }
     }
 }

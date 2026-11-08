@@ -36,11 +36,13 @@ let keyRows: [[Key]] = {
 final class KeyboardView: NSView {
     private struct Cap { let key: Key; let frame: CGRect; let layer: CALayer; let text: CATextLayer }
     private var caps: [Cap] = []
-    private let src = CGEventSource(stateID: .hidSystemState)
+    private let src = CGEventSource(stateID: .privateState)
     private var flags: CGEventFlags = []
     private var capsOn = false
     private var repeatTimer: Timer?
     var onDismiss: (() -> Void)?
+    /// Typing goes to the tablet's focused app, not to whatever is active on the Mac.
+    var targetPid: (() -> pid_t?)?
     override var isFlipped: Bool { true }
 
     override init(frame: NSRect) {
@@ -99,7 +101,7 @@ final class KeyboardView: NSView {
         for down in [true, false] {
             let e = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: down)
             e?.flags = capsOn ? flags.union(.maskAlphaShift) : flags
-            e?.post(tap: .cghidEventTap)
+            if let pid = targetPid?() { e?.postToPid(pid) } else { e?.post(tap: .cghidEventTap) }
         }
     }
 

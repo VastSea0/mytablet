@@ -57,6 +57,7 @@ final class Shell {
     private var downPoint = CGPoint.zero, downTime = 0.0, lastPoint = CGPoint.zero, panBase: CGFloat = 0, dragging = false, pressedTile: Tile?
 
     var passTap: ((CGPoint) -> Void)?
+    private var focusPid: pid_t?
     let edgeHeight: CGFloat = 32 // starts above Android's own bottom-edge system gesture band
     private let dockHeight: CGFloat = 96
 
@@ -219,6 +220,7 @@ final class Shell {
         keyPanel.setFrame(f, display: true)
         kb = KeyboardView(frame: CGRect(origin: .zero, size: f.size))
         kb.onDismiss = { [weak self] in self?.setKeyboard(false) }
+        kb.targetPid = { [weak self] in self?.focusPid }
         keyPanel.contentView = kb
     }
 
@@ -289,11 +291,12 @@ final class Shell {
     }
 
     private func launch(_ a: AppEntry) {
-        let cfg = NSWorkspace.OpenConfiguration(); cfg.activates = true
+        let cfg = NSWorkspace.OpenConfiguration(); cfg.activates = false // never pull focus away from what's happening on the Mac
         enterApp()
         let display = cgFrame, area = usableArea
         NSWorkspace.shared.openApplication(at: a.url, configuration: cfg) { app, err in
             guard let app else { Log.write("launch \(a.name) failed: \(String(describing: err))"); return }
+            DispatchQueue.main.async { self.focusPid = app.processIdentifier }
             Windows.adopt(pid: app.processIdentifier, display: display, area: area) { }
         }
     }
@@ -505,11 +508,12 @@ final class Shell {
     }
 
     /// After a real tap on app content, mirror iPadOS: text focus brings up the keyboard.
-    func tappedInApp() {
+    func tappedInApp(_ target: InputTarget?) {
+        guard let target else { return }
+        focusPid = target.pid
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else { return }
-            let display = CGDisplayBounds(self.displayID)
-            let focused = Windows.textFocused(on: display)
+            let focused = Windows.textFocused(pid: target.pid)
             DispatchQueue.main.async {
                 guard self.mode == .app else { return }
                 if focused != self.keyPanel.isVisible { self.setKeyboard(focused) }
