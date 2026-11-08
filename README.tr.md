@@ -23,6 +23,7 @@ Uygulamayı `open` ile başlat, shell'den başlatınca izinler terminale bağlan
 | Alt kenardan yukarı çekme | Ana ekran (kısa: Dock, çekip bekleme: uygulama değiştirici) |
 | Alt kenar boyunca kaydırma | Uygulama değiştirme |
 | Sağ üstten aşağı çekme | Kontrol Merkezi |
+| Uygulamadayken sol üstten aşağı çekme | Gerçek macOS menü çubuğu (6 saniye) |
 | Ana ekranda uzun basma | Düzenleme modu |
 | Uygulamayı başka uygulamanın üstüne sürükleme | Klasör oluşturma |
 | Üç parmak yukarı / sola / sağa | Uygulama değiştirici / uygulama geçişi |

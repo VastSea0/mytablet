@@ -367,11 +367,13 @@ final class Shell {
             l.addSublayer(label(folder.name, width: f.width, y: f.height + 6))
         case .widget(let title, _, _):
             // macOS draws the widget's content; the glass behind it is Apple's. The capture's black backing
-            // drops out with a screen blend, which keeps the text and graphics macOS rendered.
-            let g = makeGlass(glassRect(f), radius: 26)
+            // is removed in RealWidgets, which keeps the text and graphics macOS rendered.
+            let size = liveWidgets[title]?.frame.size ?? f.size
+            let k = min(f.width / size.width, f.height / size.height)
+            let fit = CGRect(x: f.midX - size.width * k / 2, y: f.midY - size.height * k / 2, width: size.width * k, height: size.height * k)
+            let g = makeGlass(glassRect(fit), radius: 24 * k)
             glassHost.addSubview(g.view); folderGlass[item.key] = g.view
             let c = CALayer(); c.frame = g.content.bounds; c.contents = widgetImages[title]; c.contentsGravity = .resizeAspect
-            c.compositingFilter = "screenBlendMode"
             g.content.addSublayer(c); widgetLayers[item.key] = c
             l.shadowOpacity = 0
             l.addSublayer(label(RealWidgets.displayName(title), width: f.width, y: f.height + 4))
@@ -875,11 +877,14 @@ final class Shell {
         statusPanel.orderFrontRegardless()
     }
 
+    /// Icons live in a layer and glass in views above it; they always appear and disappear together.
+    private func setHomeVisible(_ on: Bool) { homeLayer.isHidden = !on; glassHost.isHidden = !on }
+
     private let desktopLevel = NSWindow.Level(Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
 
     /// Home covers the windows; lowering it leaves just the wallpaper behind them.
     private func raiseHome() { main.level = .statusBar; main.alphaValue = 1; main.orderFrontRegardless(); statusPanel.orderFrontRegardless() }
-    private func lowerHome() { main.level = desktopLevel; main.alphaValue = 1; homeLayer.isHidden = true; main.orderFrontRegardless() }
+    private func lowerHome() { main.level = desktopLevel; main.alphaValue = 1; setHomeVisible(false); main.orderFrontRegardless() }
 
     // MARK: mode transitions
 
@@ -888,7 +893,7 @@ final class Shell {
         hideMenuBar()
         setDock(true, animated: animated); pill.orderOut(nil); setKeyboard(false)
         switcherLayer.isHidden = true; emptyLabel.isHidden = true
-        homeLayer.isHidden = false
+        setHomeVisible(true)
         raiseHome()
         refreshWidgets()
         if animated {
@@ -966,9 +971,10 @@ final class Shell {
     // MARK: app switcher
 
     private func showSwitcher() {
+        exitEdit()
         mode = .switcher
         setKeyboard(false); setDock(true); pill.orderOut(nil)
-        homeLayer.isHidden = true
+        setHomeVisible(false)
         switcherLayer.isHidden = false
         raiseHome()
         rebuildCards()
@@ -1044,7 +1050,7 @@ final class Shell {
         if !liveShown {
             guard up > 12 else { return }
             liveShown = true
-            homeLayer.isHidden = false; switcherLayer.isHidden = true
+            setHomeVisible(true); switcherLayer.isHidden = true
             raiseHome()
             overlayPanel.orderFrontRegardless()
             overlay.addSublayer(c)
@@ -1369,7 +1375,7 @@ final class Shell {
                 if !dragging, mode == .app, downPoint.y >= menuInset { passTap?(downPoint) }
             }
         case .menuEdge:
-            if dy > 40 { revealMenuBar() } else if !dragging, mode == .app, downPoint.y >= menuInset { passTap?(downPoint) }
+            if dy > 40 { if mode == .app { revealMenuBar() } } else if !dragging, mode == .app, downPoint.y >= menuInset { passTap?(downPoint) }
         case .keyboard: kb.touchUp()
         case .drag(let item): drop(item, at: p)
         case .cc:
@@ -1410,7 +1416,10 @@ final class Shell {
                 CATransaction.begin(); CATransaction.setAnimationDuration(0.25)
                 card.layer.setAffineTransform(CGAffineTransform(translationX: 0, y: -H)); card.layer.opacity = 0; card.label.opacity = 0
                 CATransaction.commit()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.rebuildCards() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    guard let self else { return }
+                    if Windows.onTablet(self.cgFrame).isEmpty { self.showHome(animated: true) } else { self.rebuildCards() }
+                }
             } else if dragging {
                 card.layer.spring("transform", to: NSValue(caTransform3D: CATransform3DIdentity), damping: 22, stiffness: 300)
             } else { raise(card.win) }

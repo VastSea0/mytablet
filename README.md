@@ -17,9 +17,12 @@ The resolution is currently fixed to that tablet's 1920×1200 panel.
 - **Touch:** tap, double tap, scroll with momentum, press-and-drag, long press for secondary click, two-finger
   scroll, pinch and rotate.
 - **Two people's worth of input:** tablet taps and scrolls don't take the Mac's pointer or focus.
+- **Liquid Glass:** Dock, Control Center, folders, keyboard and widgets use Apple's own `NSGlassEffectView`.
 - **Home screen:** your real apps and Dock, spring animations, edit mode, drag to reorder, folders, and a
   layout that persists.
-- **Widgets:** clock, calendar, upcoming events, battery, CPU and memory, all live.
+- **Windowing:** apps open as free windows over the wallpaper, like iPadOS 26. The Mac's menu bar is replaced by a
+  status bar; pull down from the top left for the real one.
+- **Widgets:** the macOS widgets on your desktop, mirrored live on real glass. Tapping one opens its app.
 - **Control Center:** Wi-Fi, Bluetooth, dark mode, media keys, Mac volume, tablet brightness, screenshots.
 - **Multitasking:** swipe home with the window following your finger, app switcher with live thumbnails, Dock
   with recent apps.
@@ -46,6 +49,7 @@ ad-hoc signed and macOS will ask for the permissions again after every build.
 | Pull up from the bottom edge | Home (short pull: Dock, pull and hold: app switcher) |
 | Slide along the bottom edge | Switch apps |
 | Pull down from the top right | Control Center |
+| Pull down from the top left, in an app | Real macOS menu bar for 6 seconds |
 | Long press on the home screen | Edit mode |
 | Drag an app onto another | Create a folder |
 | Three fingers up / left / right | App switcher / switch apps |
@@ -64,6 +68,7 @@ and window dragging uses Accessibility, so neither touches the pointer.
   position. They also make the target app active for that time.
 - A tap briefly activates the tapped app (roughly 100 ms) before focus returns to the Mac's app.
 - Android can briefly show its system bars when a swipe starts at the very edge of the screen.
+- Widgets are mirrored images: you can't interact inside one, and a tap opens its app for known widgets only.
 - No Split View or portrait orientation yet.
 - Private APIs are used (`CGVirtualDisplay`, gesture event fields, `_AXUIElementGetWindow`, IOBluetooth power
   control), so a macOS update can break them.
