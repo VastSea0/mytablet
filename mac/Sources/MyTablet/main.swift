@@ -55,13 +55,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         session = s
         let sh = Shell(displayID: d.id)
         shell = sh
-        if ProcessInfo.processInfo.environment["MYTABLET_SHELL_TEST"] != nil { HitTest.onlyOwner = ["TouchLab", "Calculator", "TextEdit"] } // shell-only test mode: app input is dropped
+        if ProcessInfo.processInfo.environment["MYTABLET_SHELL_TEST"] != nil { HitTest.onlyOwner = ["TouchLab", "Calculator", "AppLab"] } // shell-only test mode: app input is dropped
         let testing = ProcessInfo.processInfo.environment["MYTABLET_REPLAY"] != nil // replays target windows directly, no shell on top
         if !testing { sh.start() }
         if !testing { s.gestures.shellCaptures = { [weak sh] p, h in sh?.captures(p, height: h) ?? false } }
         s.gestures.shellHandle = { [weak sh] e in DispatchQueue.main.async { sh?.handle(e) } }
         s.gestures.onSystemGesture = { [weak sh] g in DispatchQueue.main.async { sh?.system(g) } }
-        s.gestures.onTap = { [weak sh] t in sh?.tappedInApp(t) }
+        s.gestures.onTap = { [weak sh] t, p in sh?.tappedInApp(t, at: p) }
         sh.passTap = { [weak s] p in s?.gestures.forwardTap(p) }
         sh.playSound = { [weak s] k in s?.playSound(k) }
         s.start(display: d)

@@ -31,7 +31,7 @@ final class GestureEngine {
     /// Tablet shell hooks: `shellCaptures` claims a touch sequence at its first finger.
     var shellCaptures: ((CGPoint, CGFloat) -> Bool)?
     var shellHandle: ((TouchEvent) -> Void)?
-    var onTap: ((InputTarget?) -> Void)?
+    var onTap: ((InputTarget?, CGPoint) -> Void)?
     private var shellOwns = false
 
     enum SystemGesture { case up, down, left, right }
@@ -219,7 +219,7 @@ final class GestureEngine {
         tapCount = (t - lastTapTime < 0.35 && hypot(p.x - lastTapPoint.x, p.y - lastTapPoint.y) < 24) ? tapCount + 1 : 1
         lastTapTime = t; lastTapPoint = p
         keepMacFocus { inject.click(p, clicks: tapCount) }
-        onTap?(inject_target)
+        onTap?(inject_target, p)
     }
 
     private func finishScroll() {

@@ -161,6 +161,10 @@ enum HitTest {
 
     static func isText(at p: CGPoint) -> Bool { roleChain(at: p).contains(where: textRoles.contains) }
 
+    static func isEditable(at p: CGPoint) -> Bool {
+        roleChain(at: p).contains { ["AXTextArea", "AXTextField", "AXComboBox", "AXSearchField", "AXWebArea"].contains($0) }
+    }
+
     private static func roleChain(at p: CGPoint) -> [String] {
         var el: AXUIElement?, out: [String] = []
         guard AXUIElementCopyElementAtPosition(system, Float(p.x), Float(p.y), &el) == .success, var cur = el else { return [] }

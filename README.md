@@ -1,7 +1,7 @@
 # MyTablet
 
 Turn an Android tablet into a low-latency touch display for your Mac. It streams a pixel-exact virtual
-display over USB and adds an iPadOS-inspired home screen on the tablet, while your Mac's own screen,
+display over USB and adds an iPadOS 27-inspired home screen on the tablet, while your Mac's own screen,
 pointer and focus keep working normally.
 
 [Türkçe](README.tr.md)
@@ -16,11 +16,12 @@ The resolution is currently fixed to that tablet's 1920×1200 panel.
 - **Sharp text:** the virtual display maps 1:1 to the panel, and still frames are re-encoded until they settle.
 - **Touch:** tap, double tap, scroll with momentum, press-and-drag, long press for secondary click, two-finger
   scroll, pinch and rotate.
-- **Two people's worth of input:** tablet taps and scrolls don't take the Mac's pointer or focus.
-- **Liquid Glass:** Dock, Control Center, folders, keyboard and widgets use Apple's own `NSGlassEffectView`.
+- **Independent input:** tablet taps and scrolls return the Mac's pointer immediately.
+- **Liquid Glass:** Dock, Control Center, folders, keyboard and widgets use Apple's own `NSGlassEffectView`, placed over
+  a backdrop in their own window, because the effect only refracts content in the same window.
 - **Home screen:** your real apps and Dock, spring animations, edit mode, drag to reorder, folders, and a
   layout that persists.
-- **Windowing:** apps open as free windows over the wallpaper, like iPadOS 26. The Mac's menu bar is replaced by a
+- **Windowing:** apps open as free windows over the wallpaper, like iPadOS. The Mac's menu bar is replaced by a
   status bar; pull down from the top left for the real one.
 - **Widgets:** the macOS widgets on your desktop, mirrored live on real glass. Tapping one opens its app.
 - **Control Center:** Wi-Fi, Bluetooth, dark mode, media keys, Mac volume, tablet brightness, screenshots.
@@ -66,8 +67,11 @@ and window dragging uses Accessibility, so neither touches the pointer.
 
 - Pinches and drags hold the Mac's pointer for as long as they last, because macOS routes them by the live pointer
   position. They also make the target app active for that time.
-- A tap briefly activates the tapped app (roughly 100 ms) before focus returns to the Mac's app.
-- Android can briefly show its system bars when a swipe starts at the very edge of the screen.
+- A tapped app stays active so menus and text fields work. If you typed or clicked on the Mac in the last 4 seconds,
+  focus returns to the Mac's app instead.
+- To stop Android's bars appearing over the stream, the receiver turns the `user_setup_complete` secure setting off while
+  streaming and back on when streaming stops. If the tablet loses power mid-session and acts oddly, run
+  `adb shell settings put secure user_setup_complete 1`.
 - Widgets are mirrored images: you can't interact inside one, and a tap opens its app for known widgets only.
 - No Split View or portrait orientation yet.
 - Private APIs are used (`CGVirtualDisplay`, gesture event fields, `_AXUIElementGetWindow`, IOBluetooth power

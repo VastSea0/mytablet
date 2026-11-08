@@ -147,8 +147,9 @@ final class Shell {
     var passTap: ((CGPoint) -> Void)?
     var playSound: ((Int) -> Void)?
     private var focusPid: pid_t?
-    private var topEdge: CGFloat { menuInset }
-    let edgeHeight: CGFloat = 20
+    // In full screen the app owns the display, so only a thin strip is kept for the system gestures.
+    private func topZone(_ fullscreen: Bool) -> CGFloat { fullscreen ? 10 : menuInset }
+    private func bottomZone(_ fullscreen: Bool) -> CGFloat { fullscreen ? 12 : 20 }
 
     init(displayID: CGDirectDisplayID) { self.displayID = displayID }
 
@@ -812,7 +813,9 @@ final class Shell {
     private func layoutDock() {
         dockRoot.sublayers?.forEach { $0.removeFromSuperlayer() }; dockTiles = []
         let size: CGFloat = 60, gap: CGFloat = 12, pad: CGFloat = 12, maxApps = max(1, Int((W - 120) / (size + gap)))
-        let pinned = Array(layout.dock.prefix(maxApps))
+        // Recent apps always keep their section, even when the pinned row could fill the Dock.
+        let hasRecents = (layout.recents ?? []).contains { !layout.dock.contains($0) && apps[$0] != nil }
+        let pinned = Array(layout.dock.prefix(hasRecents ? max(1, maxApps - 3) : maxApps))
         let recent = (layout.recents ?? []).filter { !pinned.contains($0) && apps[$0] != nil }.prefix(max(0, min(3, maxApps - pinned.count)))
         let count = CGFloat(pinned.count + recent.count)
         let width = count * size + max(0, count - 1) * gap + 2 * pad + (recent.isEmpty ? 0 : 18)
@@ -1308,9 +1311,9 @@ final class Shell {
     /// Runs on the gesture queue at the first finger of a sequence: does the shell own it?
     func captures(_ p: CGPoint, height: CGFloat) -> Bool {
         stateLock.lock(); defer { stateLock.unlock() }
-        if p.y >= height - edgeHeight && !_fullscreen { return true }
+        if p.y >= height - bottomZone(_fullscreen) { return true }
         if _ccOpen { return true }
-        if p.y < topEdge && !menuShownSafe && !_fullscreen { return true } // status bar: Control Center on the right, menu bar on the left
+        if p.y < topZone(_fullscreen) && !menuShownSafe && (!_fullscreen || p.x > cgWidth * 0.55) { return true } // status bar: Control Center on the right, menu bar on the left
         if _mode != .app { return true }
         if let r = _kbRect, r.contains(p) { return true }
         if _dockRect != nil { return true } // a tap outside dismisses the dock
@@ -1366,13 +1369,13 @@ final class Shell {
             touch = .cc
             return
         }
-        if p.y < topEdge && !menuShown && !fullscreenWindow { if p.x > W * 0.55 { touch = .topEdge; prepareControlCenter() } else { touch = .menuEdge }; return }
+        if p.y < topZone(fullscreenWindow) && !menuShown && (!fullscreenWindow || p.x > W * 0.55) { if p.x > W * 0.55 { touch = .topEdge; prepareControlCenter() } else { touch = .menuEdge }; return }
         if folderPos != nil { touch = folderRect.contains(p) ? .folder : .folderOutside; return }
         if gallery != nil { touch = .gallery; return }
         if let r = kbR, r.contains(p) {
             kb.touchDown(at: CGPoint(x: p.x - r.minX, y: p.y - r.minY)); touch = .keyboard; return
         }
-        if p.y >= H - edgeHeight && dockR?.contains(p) != true && !fullscreenWindow { touch = .edge; beginLiveCard(); return }
+        if p.y >= H - bottomZone(fullscreenWindow) && dockR?.contains(p) != true { touch = .edge; beginLiveCard(); return }
         if let r = dockR {
             if r.contains(p) {
                 let local = CGPoint(x: p.x - r.minX, y: p.y - r.minY)
@@ -1407,7 +1410,7 @@ final class Shell {
     private func moved(_ p: CGPoint) {
         let dx = p.x - downPoint.x, dy = p.y - downPoint.y
         // The bottom key row shares the screen edge: a clear upward pull is the home gesture, not a key.
-        if case .keyboard = touch, downPoint.y >= H - edgeHeight, dy < -45 {
+        if case .keyboard = touch, downPoint.y >= H - bottomZone(fullscreenWindow), dy < -45 {
             kb.cancelTouch(); touch = .edge; beginLiveCard(); return
         }
         if !dragging && hypot(dx, dy) > 8 {
@@ -1582,16 +1585,18 @@ final class Shell {
         }
     }
 
-    /// After a real tap on app content, mirror iPadOS: text focus brings up the keyboard.
-    func tappedInApp(_ target: InputTarget?) {
+    /// iPadOS keyboard behaviour: it appears when you tap an editable field and goes when focus leaves one.
+    /// Tapping elsewhere while a field keeps focus must not bring back a keyboard the user dismissed.
+    func tappedInApp(_ target: InputTarget?, at point: CGPoint) {
         guard let target else { return }
         DispatchQueue.main.async { self.focusPid = target.pid }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else { return }
             let focused = Windows.textFocused(pid: target.pid)
+            let onField = HitTest.isEditable(at: point)
             DispatchQueue.main.async {
                 guard self.mode == .app else { return }
-                if focused != (self._kbRect != nil) { self.setKeyboard(focused) }
+                if !focused { self.setKeyboard(false) } else if onField { self.setKeyboard(true) }
             }
         }
     }
