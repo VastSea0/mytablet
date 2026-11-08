@@ -79,6 +79,12 @@ final class GestureEngine {
     private func keepMacFocus(_ action: () -> Void) {
         let macApp = NSWorkspace.shared.frontmostApplication
         let target = inject_target
+        // macOS swallows the first click on an inactive app, so the target goes active for the click itself.
+        if let target, macApp?.processIdentifier != target.pid,
+           let app = NSRunningApplication(processIdentifier: target.pid) {
+            app.activate()
+            for _ in 0..<12 where !app.isActive { usleep(5000) }
+        }
         action()
         focused = target ?? focused
         q.asyncAfter(deadline: .now() + 0.08) {
